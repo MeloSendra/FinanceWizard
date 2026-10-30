@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { useApp } from "./state";
-import { categoryTree, currentMonth, formatMonth, formatMoney, shiftMonth } from "./format";
+import { categoryColor, categoryTree, currentMonth, formatMonth, formatMoney, shiftMonth } from "./format";
 import type { Kind } from "./api";
 
 export function useAction() {
@@ -23,6 +23,23 @@ export function useAction() {
 export function Money({ cents }: { cents: number }) {
   const { settings } = useApp();
   return <>{formatMoney(cents, settings.currency)}</>;
+}
+
+/** For the `--cat` variable that the category styles read. */
+export function useCategoryStyle(id: number): CSSProperties | undefined {
+  const { categories } = useApp();
+  const category = categories.find((entry) => entry.id === id);
+  return category && ({ "--cat": categoryColor(category, categories) } as CSSProperties);
+}
+
+export function CategoryChip({ id, name }: { id: number; name: string }) {
+  const style = useCategoryStyle(id);
+  return (
+    <span className="cat-chip" style={style}>
+      <i className="cat-dot" />
+      {name}
+    </span>
+  );
 }
 
 export function Dialog({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
@@ -130,6 +147,36 @@ export function MonthNav() {
   );
 }
 
+/** Asks for the word `DELETE`, for actions that remove a lot at once. */
+export function TypedConfirm(props: {
+  title: string;
+  message: ReactNode;
+  confirmLabel: string;
+  onConfirm: () => Promise<void>;
+  onClose: () => void;
+}) {
+  const { error, busy, run } = useAction();
+  const [typed, setTyped] = useState("");
+  return (
+    <Dialog title={props.title} onClose={props.onClose}>
+      <p>{props.message}</p>
+      <Field label="Type DELETE to confirm">
+        <input autoComplete="off" autoFocus value={typed} onChange={(event) => setTyped(event.target.value)} />
+      </Field>
+      <FormError message={error} />
+      <div className="dialog-actions">
+        <span />
+        <button type="button" onClick={props.onClose}>
+          Cancel
+        </button>
+        <button type="button" className="danger" disabled={busy || typed !== "DELETE"} onClick={() => run(props.onConfirm)}>
+          {props.confirmLabel}
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
 /** Archived categories are only offered when they are already selected. */
 export function CategorySelect(props: {
   value: number | null;
@@ -138,16 +185,20 @@ export function CategorySelect(props: {
   placeholder: string;
   includeArchived?: boolean;
   exclude?: number;
+  topLevelOnly?: boolean;
+  disabled?: boolean;
 }) {
   const { categories } = useApp();
   const entries = categoryTree(categories, props.kind).filter(
     ({ category }) =>
       category.id !== props.exclude &&
+      (!props.topLevelOnly || category.parentId === null) &&
       (props.includeArchived || !category.archived || category.id === props.value),
   );
   return (
     <select
       value={props.value ?? ""}
+      disabled={props.disabled}
       onChange={(event) => props.onChange(event.target.value ? Number(event.target.value) : null)}
     >
       <option value="">{props.placeholder}</option>

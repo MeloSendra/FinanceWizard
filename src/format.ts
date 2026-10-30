@@ -79,6 +79,61 @@ export function dayNumber(iso: string): number {
   return parseLocal(iso).getTime() / 86_400_000;
 }
 
+function toIso(date: Date): string {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+export function addDays(iso: string, days: number): string {
+  const date = parseLocal(iso);
+  date.setDate(date.getDate() + days);
+  return toIso(date);
+}
+
+/** The Monday of the week containing `iso`. */
+export function startOfWeek(iso: string): string {
+  return addDays(iso, -((parseLocal(iso).getDay() + 6) % 7));
+}
+
+/** This week inside the current month, otherwise the month's last week. */
+export function weekForMonth(month: string): string {
+  const today = todayIso();
+  return startOfWeek(today.startsWith(month) ? today : monthBounds(month).to);
+}
+
+export function formatWeekday(iso: string): string {
+  return parseLocal(iso).toLocaleDateString(undefined, { weekday: "short" });
+}
+
+export function formatDayMonth(iso: string): string {
+  return parseLocal(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+/** Used for categories without a chosen color, and offered first for new ones.
+ * This order keeps neighbouring hues apart for color-blind readers. */
+const CATEGORY_PALETTE = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"];
+
+export function paletteColor(id: number): string {
+  return CATEGORY_PALETTE[id % CATEGORY_PALETTE.length];
+}
+
+export function nextPaletteColor(categories: Category[]): string {
+  const used = new Set(categories.filter((category) => category.parentId === null).map((c) => c.color ?? paletteColor(c.id)));
+  return CATEGORY_PALETTE.find((color) => !used.has(color)) ?? paletteColor(categories.length);
+}
+
+/** Top-level categories show their own color. Subcategories show a darker shade
+ * of it, which differs between siblings so charts can tell them apart. */
+export function categoryColor(category: Category, categories: Category[]): string {
+  const byId = new Map(categories.map((entry) => [entry.id, entry]));
+  let root = category;
+  while (root.parentId !== null && byId.has(root.parentId)) root = byId.get(root.parentId) as Category;
+  const base = root.color ?? paletteColor(root.id);
+  if (root.id === category.id) return base;
+  const siblings = categories.filter((entry) => entry.parentId === category.parentId).map((entry) => entry.id);
+  const shade = Math.min(16 + siblings.indexOf(category.id) * 14, 58);
+  return `color-mix(in srgb, ${base} ${100 - shade}%, black)`;
+}
+
 export interface TreeEntry {
   category: Category;
   depth: number;

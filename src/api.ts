@@ -12,6 +12,7 @@ export interface Category {
   parentId: number | null;
   defaultBudgetCents: number | null;
   archived: boolean;
+  color: string | null;
   transactionCount: number;
   childCount: number;
   recurringCount: number;
@@ -22,6 +23,7 @@ export interface CategoryInput {
   kind: Kind;
   parentId: number | null;
   defaultBudgetCents: number | null;
+  color: string | null;
 }
 
 export interface Transaction {
@@ -87,6 +89,11 @@ export interface RecurringInput {
   installmentCount: number | null;
   openingPaidCents: number;
   openingPaidInstallments: number;
+}
+
+export interface MissedPayment {
+  date: string;
+  amountCents: number;
 }
 
 export interface ValueRecord {
@@ -176,6 +183,9 @@ export const api = {
     invoke<void>("update_recurring_value", { id, effectiveDate, amountCents }),
   deleteRecurringValue: (id: number) => invoke<void>("delete_recurring_value", { id }),
 
+  missedPayments: (id: number) => invoke<MissedPayment[]>("missed_payments", { id }),
+  addMissedPayments: (id: number, dates: string[]) => invoke<number>("add_missed_payments", { id, dates }),
+
   monthReport: (month: string) => invoke<MonthReport>("month_report", { month }),
   setBudget: (month: string, categoryId: number, amountCents: number) =>
     invoke<void>("set_budget", { month, categoryId, amountCents }),
@@ -188,4 +198,8 @@ export const api = {
   restoreDatabase: (path: string, passphrase: string | null) =>
     invoke<void>("restore_database", { path, passphrase }),
   exportTransactions: () => invoke<boolean>("export_transactions"),
+
+  countTransactions: (from: string, to: string) => invoke<number>("count_transactions", { from, to }),
+  purgeTransactions: (from: string, to: string) => invoke<number>("purge_transactions", { from, to }),
+  resetAllData: () => invoke<void>("reset_all_data"),
 };

@@ -1,6 +1,19 @@
-# FinanceWizard
+<p align="center">
+  <img src="docs/wizard.svg" alt="ASCII art of a wizard" width="240">
+</p>
+
+<h1 align="center">FinanceWizard</h1>
 
 A local, single-user Windows app for recording income, expenses, recurring payments, and budgets. Your financial data never leaves your computer: the only network request is a check for new versions on GitHub. The design is described in [docs/plan.md](docs/plan.md).
+
+## Install
+
+1. Download the `x64-setup.exe` file from the [latest release](https://github.com/MeloSendra/FinanceWizard/releases/latest).
+2. Run it. If Windows SmartScreen warns you, choose **More info > Run anyway**. The warning appears because the installer is not code-signed.
+3. Open FinanceWizard and choose a PIN.
+4. Save the recovery key somewhere away from this computer, such as a password manager. It is shown only once, and it opens your data if you forget your PIN.
+
+The app updates itself after that. See [Updates](#updates).
 
 ## Development
 

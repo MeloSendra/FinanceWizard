@@ -3,7 +3,8 @@ import { check } from "@tauri-apps/plugin-updater";
 import { useEffect, useState } from "react";
 import { api, type BackupChoice } from "../api";
 import { useApp, useLoad } from "../state";
-import { formatDate } from "../format";
+import { coinDropEnabled, loadCoins, saveCoins, type CoinStyle } from "../coins";
+import { amountText, formatDate, parseAmount } from "../format";
 import { saveTheme, loadTheme, type ThemeMode } from "../theme";
 import { Confirm, Dialog, Field, Form, FormError, TypedConfirm, useAction } from "../ui";
 
@@ -15,8 +16,29 @@ const THEMES: { mode: ThemeMode; label: string }[] = [
   { mode: "custom", label: "Custom" },
 ];
 
+const COIN_STYLES: { style: CoinStyle; label: string }[] = [
+  { style: "plain", label: "Plain" },
+  { style: "treasure", label: "Treasure" },
+  { style: "gold", label: "Gold pieces" },
+  { style: "comparison", label: "Comparison" },
+];
+
 function Appearance() {
   const [theme, setTheme] = useState(loadTheme);
+  const [coins, setCoins] = useState(loadCoins);
+  const [price, setPrice] = useState(amountText(coins.priceCents));
+
+  const changeCoins = (next: Partial<typeof coins>) => {
+    const updated = { ...coins, ...next };
+    setCoins(updated);
+    saveCoins(updated);
+  };
+
+  const changePrice = (text: string) => {
+    setPrice(text);
+    const priceCents = parseAmount(text);
+    if (priceCents) changeCoins({ priceCents });
+  };
 
   const change = (next: Partial<typeof theme>) => {
     const updated = { ...theme, ...next };
@@ -46,6 +68,36 @@ function Appearance() {
           </Field>
           <Field label="Accent">
             <input type="color" className="color-input" value={theme.accent} onChange={(event) => change({ accent: event.target.value })} />
+          </Field>
+        </div>
+      )}
+      <h3 className="field-label" style={{ margin: "14px 0 6px" }}>
+        Money remaining
+      </h3>
+      <div className="segmented" role="group" aria-label="Money remaining style">
+        {COIN_STYLES.map(({ style, label }) => (
+          <button key={style} type="button" aria-pressed={coins.style === style} onClick={() => changeCoins({ style })}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {coins.style === "treasure" && (
+        <label className="check" style={{ marginTop: 12 }}>
+          <input
+            type="checkbox"
+            checked={coinDropEnabled(coins)}
+            onChange={(event) => changeCoins({ coinDrop: event.target.checked })}
+          />
+          Drop coins when a scheduled payment goes out
+        </label>
+      )}
+      {coins.style === "comparison" && (
+        <div className="form-grid" style={{ marginTop: 12 }}>
+          <Field label="Count it in" hint="In the plural, such as coffees.">
+            <input value={coins.item} onChange={(event) => changeCoins({ item: event.target.value })} />
+          </Field>
+          <Field label="Price of one">
+            <input inputMode="decimal" value={price} onChange={(event) => changePrice(event.target.value)} />
           </Field>
         </div>
       )}

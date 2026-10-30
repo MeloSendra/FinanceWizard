@@ -14,6 +14,9 @@ export interface AppState {
   /** A newer version found by the update check, ready to install. */
   update: Update | null;
   setUpdate: (update: Update | null) => void;
+  /** Payments created when the app opened, which Treasure shows falling. */
+  droppedCoins: number;
+  clearDroppedCoins: () => void;
 }
 
 export const AppContext = createContext<AppState | null>(null);

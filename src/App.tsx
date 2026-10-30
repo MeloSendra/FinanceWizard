@@ -56,6 +56,8 @@ function Shell() {
   const [month, setMonth] = useState(currentMonth);
   const [toast, setToast] = useState<string | null>(null);
   const [update, setUpdate] = useState<Update | null>(null);
+  const [droppedCoins, setDroppedCoins] = useState(0);
+  const clearDroppedCoins = useCallback(() => setDroppedCoins(0), []);
   const timer = useRef<number | undefined>(undefined);
 
   const notify = useCallback((message: string) => {
@@ -70,6 +72,7 @@ function Shell() {
       .generateDuePayments()
       .then((created) => {
         if (created > 0) notify(`${created} scheduled ${created === 1 ? "payment" : "payments"} added.`);
+        setDroppedCoins(created);
         refresh();
       })
       .catch((error) => notify(String(error)));
@@ -92,8 +95,21 @@ function Shell() {
   }, []);
 
   const state = useMemo(
-    () => settings && { categories, settings, version, refresh, notify, month, setMonth, update, setUpdate },
-    [categories, settings, version, month, update],
+    () =>
+      settings && {
+        categories,
+        settings,
+        version,
+        refresh,
+        notify,
+        month,
+        setMonth,
+        update,
+        setUpdate,
+        droppedCoins,
+        clearDroppedCoins,
+      },
+    [categories, settings, version, month, update, droppedCoins],
   );
   if (!state) return null;
 

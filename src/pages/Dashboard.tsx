@@ -1,7 +1,9 @@
-import { api } from "../api";
+import { useState } from "react";
+import { api, type MonthReport } from "../api";
+import { coinDropEnabled, comparisonText, GoldPieces, loadCoins, Treasure } from "../coins";
 import { useApp, useLoad } from "../state";
 import { TrendChart } from "../charts";
-import { formatDate } from "../format";
+import { formatDate, formatMoney } from "../format";
 import { CategoryChip, Empty, Money, MonthNav } from "../ui";
 
 function greeting(): string {
@@ -21,13 +23,49 @@ export function OverBudget() {
   );
 }
 
+function MoneyRemaining({ report }: { report: MonthReport }) {
+  const { settings, droppedCoins, clearDroppedCoins } = useApp();
+  const [coins] = useState(loadCoins);
+  const remaining = report.incomeCents - report.projectedCents;
+  const className = `stat-value${remaining < 0 ? " negative" : ""}`;
+  const real = <Money cents={remaining} />;
+
+  return (
+    <div className="card">
+      <div className="stat-label">Money remaining</div>
+      <div className={className}>
+        {coins.style === "gold" ? (
+          <GoldPieces cents={remaining} real={formatMoney(remaining, settings.currency)} />
+        ) : coins.style === "comparison" ? (
+          comparisonText(remaining, coins)
+        ) : (
+          real
+        )}
+      </div>
+      {coins.style === "comparison" && <div className="hint">{real}</div>}
+      {report.upcomingCents > 0 && (
+        <div className="hint">
+          after <Money cents={report.upcomingCents} /> still due
+        </div>
+      )}
+      {coins.style === "treasure" && (
+        <Treasure
+          remainingCents={remaining}
+          incomeCents={report.incomeCents}
+          dropped={coinDropEnabled(coins) ? droppedCoins : 0}
+          onDropped={clearDroppedCoins}
+        />
+      )}
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const { month, categories } = useApp();
   const report = useLoad(() => api.monthReport(month), [month]);
   if (!report) return null;
 
   const alerts = report.rows.filter((row) => row.budgetCents !== null && row.projectedCents > row.budgetCents);
-  const remaining = report.incomeCents - report.projectedCents;
   const isEmpty = report.trend.every((point) => point.incomeCents === 0 && point.expenseCents === 0);
 
   return (
@@ -44,17 +82,7 @@ export default function Dashboard() {
             <Money cents={report.spentCents} />
           </div>
         </div>
-        <div className="card">
-          <div className="stat-label">Money remaining</div>
-          <div className={`stat-value${remaining < 0 ? " negative" : ""}`}>
-            <Money cents={remaining} />
-          </div>
-          {report.upcomingCents > 0 && (
-            <div className="hint">
-              after <Money cents={report.upcomingCents} /> still due
-            </div>
-          )}
-        </div>
+        <MoneyRemaining report={report} />
         <div className="card">
           <div className="stat-label">Projected end of month</div>
           <div className="stat-value">

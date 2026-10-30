@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
+import type { Update } from "@tauri-apps/plugin-updater";
 import type { Category, Settings } from "./api";
 
 export interface AppState {
@@ -10,6 +11,9 @@ export interface AppState {
   notify: (message: string) => void;
   month: string;
   setMonth: (month: string) => void;
+  /** A newer version found by the update check, ready to install. */
+  update: Update | null;
+  setUpdate: (update: Update | null) => void;
 }
 
 export const AppContext = createContext<AppState | null>(null);

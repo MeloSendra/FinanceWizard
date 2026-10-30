@@ -23,6 +23,7 @@ pub fn run() {
             let directory = directory.join("dev");
             std::fs::create_dir_all(&directory)?;
             app.manage(Database::new(directory));
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -744,6 +744,20 @@ tfoot td {
   overflow-wrap: anywhere;
 }
 
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  max-width: 1040px;
+  margin: 0 auto 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
 .toast {
   position: fixed;
   right: 20px;

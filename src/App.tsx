@@ -1,3 +1,4 @@
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type Category, type Settings as AppSettings, type VaultStatus } from "./api";
 import { AppContext } from "./state";
@@ -21,6 +22,32 @@ const PAGES = {
 
 type PageName = keyof typeof PAGES;
 
+function UpdateBanner({ update }: { update: Update }) {
+  const [installing, setInstalling] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  const install = async () => {
+    setInstalling(true);
+    setFailed(null);
+    try {
+      // On Windows the app closes here and the installer reopens it.
+      await update.downloadAndInstall();
+    } catch (error) {
+      setFailed(String(error));
+      setInstalling(false);
+    }
+  };
+
+  return (
+    <div className="banner" role="status">
+      <span>{failed ?? `Version ${update.version} is available.`}</span>
+      <button type="button" className="primary" disabled={installing} onClick={install}>
+        {installing ? "Installing…" : failed ? "Try again" : "Install and restart"}
+      </button>
+    </div>
+  );
+}
+
 function Shell() {
   const [page, setPage] = useState<PageName>("Dashboard");
   const [categories, setCategories] = useState<Category[]>([]);
@@ -28,6 +55,7 @@ function Shell() {
   const [version, setVersion] = useState(0);
   const [month, setMonth] = useState(currentMonth);
   const [toast, setToast] = useState<string | null>(null);
+  const [update, setUpdate] = useState<Update | null>(null);
   const timer = useRef<number | undefined>(undefined);
 
   const notify = useCallback((message: string) => {
@@ -56,9 +84,16 @@ function Shell() {
       .catch((error) => notify(String(error)));
   }, [version]);
 
+  // Being offline is normal, so a failed check here is not worth mentioning.
+  useEffect(() => {
+    check()
+      .then(setUpdate)
+      .catch(() => {});
+  }, []);
+
   const state = useMemo(
-    () => settings && { categories, settings, version, refresh, notify, month, setMonth },
-    [categories, settings, version, month],
+    () => settings && { categories, settings, version, refresh, notify, month, setMonth, update, setUpdate },
+    [categories, settings, version, month, update],
   );
   if (!state) return null;
 
@@ -85,6 +120,7 @@ function Shell() {
           </p>
         </aside>
         <main>
+          {update && <UpdateBanner update={update} />}
           <Page />
         </main>
       </div>

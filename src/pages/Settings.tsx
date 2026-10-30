@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
+import { check } from "@tauri-apps/plugin-updater";
+import { useEffect, useState } from "react";
 import { api, type BackupChoice } from "../api";
 import { useApp } from "../state";
 import { formatDate } from "../format";
@@ -108,6 +110,39 @@ function ChangePin() {
   );
 }
 
+function Updates() {
+  const { notify, setUpdate } = useApp();
+  const { error, busy, run } = useAction();
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    getVersion().then(setAppVersion);
+  }, []);
+
+  const checkNow = () =>
+    run(async () => {
+      const update = await check();
+      setUpdate(update);
+      if (!update) notify("You have the latest version.");
+    });
+
+  return (
+    <section className="card">
+      <h2>Updates</h2>
+      <p className="hint">
+        You are using version {appVersion ?? "…"}. The app checks GitHub for new versions when it opens. No financial data
+        is sent.
+      </p>
+      <FormError message={error} />
+      <div className="row" style={{ marginTop: 12 }}>
+        <button type="button" disabled={busy} onClick={checkNow}>
+          Check for updates
+        </button>
+      </div>
+    </section>
+  );
+}
+
 export default function Settings() {
   const { settings, refresh, notify } = useApp();
   const { error, setError, busy, run } = useAction();
@@ -201,6 +236,7 @@ export default function Settings() {
       </section>
 
       <ChangePin />
+      <Updates />
 
       <FormError message={error} />
 

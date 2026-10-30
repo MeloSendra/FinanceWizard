@@ -1,7 +1,19 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { TrendPoint, ValueRecord } from "./api";
+import type { BudgetRow, TrendPoint, ValueRecord } from "./api";
 import { useApp } from "./state";
-import { dayNumber, formatAxis, formatDate, formatMoney, formatMonth, formatMonthShort, todayIso } from "./format";
+import {
+  categoryColor,
+  dayNumber,
+  formatAxis,
+  formatDate,
+  formatDayMonth,
+  formatFigure,
+  formatMoney,
+  formatMonth,
+  formatMonthShort,
+  formatWeekday,
+  todayIso,
+} from "./format";
 
 const MARGIN = { top: 10, right: 12, bottom: 24, left: 52 };
 
@@ -229,6 +241,242 @@ export function ValueChart({ values }: { values: ValueRecord[] }) {
           from {formatDate(values[active].effectiveDate)}
         </Tip>
       )}
+    </div>
+  );
+}
+
+export interface DayTotal {
+  date: string;
+  cents: number;
+}
+
+export function WeekChart({ days }: { days: DayTotal[] }) {
+  const { settings } = useApp();
+  const { ref, width } = useWidth();
+  const [active, setActive] = useState<number | null>(null);
+  const [showTable, setShowTable] = useState(false);
+  const money = (cents: number) => formatMoney(cents, settings.currency);
+
+  const height = 220;
+  const top = 22;
+  const values = ticks(0, Math.max(...days.map((day) => day.cents), 0), 3);
+  const highest = values[values.length - 1];
+  const y = (value: number) => top + (1 - value / highest) * (height - top - MARGIN.bottom);
+  const band = (width - MARGIN.left - MARGIN.right) / days.length;
+  const barWidth = Math.min(40, Math.max(6, band - 12));
+  const baseline = y(0);
+  const today = todayIso();
+  const label = (cents: number) => (band < 58 ? formatAxis(cents, true) : formatFigure(cents));
+
+  return (
+    <>
+      <div className="chart-head">
+        <span className="hint">Expenses per day</span>
+        <button type="button" className="ghost small" onClick={() => setShowTable(!showTable)}>
+          {showTable ? "Show chart" : "Show table"}
+        </button>
+      </div>
+      {showTable ? (
+        <table>
+          <thead>
+            <tr>
+              <th>Day</th>
+              <th className="num">Spent</th>
+            </tr>
+          </thead>
+          <tbody>
+            {days.map((day) => (
+              <tr key={day.date}>
+                <td>{formatDate(day.date)}</td>
+                <td className="num">{money(day.cents)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <div className="chart" ref={ref} onMouseLeave={() => setActive(null)}>
+          {width > 0 && (
+            <svg height={height} role="img" aria-label="Expenses for each day of the week">
+              <YAxis values={values} y={y} width={width} />
+              <line x1={MARGIN.left} x2={width - MARGIN.right} y1={baseline} y2={baseline} stroke="var(--axis)" />
+              {days.map((day, index) => {
+                const x = MARGIN.left + index * band;
+                const middle = x + band / 2;
+                return (
+                  <g key={day.date}>
+                    <rect
+                      className="band"
+                      x={x}
+                      y={0}
+                      width={band}
+                      height={baseline}
+                      tabIndex={0}
+                      aria-label={`${formatDate(day.date)}: ${money(day.cents)}`}
+                      onMouseEnter={() => setActive(index)}
+                      onFocus={() => setActive(index)}
+                      onBlur={() => setActive(null)}
+                    />
+                    {day.cents > 0 && (
+                      <>
+                        <path d={topRounded(middle - barWidth / 2, y(day.cents), barWidth, baseline)} fill="var(--expense)" pointerEvents="none" />
+                        <text className="bar-value" x={middle} y={y(day.cents) - 6} textAnchor="middle" pointerEvents="none">
+                          {label(day.cents)}
+                        </text>
+                      </>
+                    )}
+                    <text className={day.date === today ? "today" : undefined} x={middle} y={height - 7} textAnchor="middle">
+                      {formatWeekday(day.date)}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+          )}
+          {active !== null && (
+            <Tip x={MARGIN.left + (active + 0.5) * band} width={width}>
+              <strong>{formatDayMonth(days[active].date)}</strong>
+              {money(days[active].cents)}
+            </Tip>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+interface Slice {
+  key: string;
+  name: string;
+  cents: number;
+  color: string;
+  /** The category this slice opens, when it has subcategories with spending. */
+  opens?: number;
+}
+
+/** Beyond this, the smallest slices fold into Other. */
+const MAX_SLICES = 7;
+
+function foldSmallest(slices: Slice[]): Slice[] {
+  const ranked = [...slices].sort((a, b) => b.cents - a.cents);
+  if (ranked.length <= MAX_SLICES) return ranked;
+  const rest = ranked.slice(MAX_SLICES - 1);
+  const cents = rest.reduce((sum, slice) => sum + slice.cents, 0);
+  return [...ranked.slice(0, MAX_SLICES - 1), { key: "other", name: `Other (${rest.length})`, cents, color: "var(--axis)" }];
+}
+
+function ringSlice(start: number, end: number, outer: number, inner: number): string {
+  const point = (radius: number, turn: number) => {
+    const angle = 2 * Math.PI * turn - Math.PI / 2;
+    return `${100 + radius * Math.cos(angle)},${100 + radius * Math.sin(angle)}`;
+  };
+  // A full circle has identical end points, which would draw nothing.
+  const stop = Math.min(end, start + 0.9999);
+  const large = stop - start > 0.5 ? 1 : 0;
+  return `M${point(outer, start)}A${outer},${outer} 0 ${large} 1 ${point(outer, stop)}L${point(inner, stop)}A${inner},${inner} 0 ${large} 0 ${point(inner, start)}Z`;
+}
+
+export function CategoryDonut({ rows }: { rows: BudgetRow[] }) {
+  const { categories, settings } = useApp();
+  const [openedId, setOpenedId] = useState<number | null>(null);
+  const [activeKey, setActiveKey] = useState<string | null>(null);
+  const money = (cents: number) => formatMoney(cents, settings.currency);
+
+  const spending = rows.filter((row) => row.spentCents > 0);
+  const colorOf = (id: number) => {
+    const category = categories.find((entry) => entry.id === id);
+    return category ? categoryColor(category, categories) : "var(--axis)";
+  };
+  const childrenOf = (id: number) =>
+    spending.filter((row) => categories.find((entry) => entry.id === row.categoryId)?.parentId === id);
+
+  const toSlice = (row: BudgetRow): Slice => ({
+    key: String(row.categoryId),
+    name: row.name,
+    cents: row.spentCents,
+    color: colorOf(row.categoryId),
+    opens: childrenOf(row.categoryId).length > 0 ? row.categoryId : undefined,
+  });
+
+  const opened = spending.find((row) => row.categoryId === openedId && childrenOf(row.categoryId).length > 0);
+  let slices: Slice[];
+  if (opened) {
+    const children = childrenOf(opened.categoryId);
+    const direct = opened.spentCents - children.reduce((sum, row) => sum + row.spentCents, 0);
+    slices = children.map((row) => ({ ...toSlice(row), opens: undefined }));
+    if (direct > 0) slices.push({ key: "direct", name: `${opened.name} (directly)`, cents: direct, color: colorOf(opened.categoryId) });
+  } else {
+    slices = spending.filter((row) => row.depth === 0).map(toSlice);
+  }
+  slices = foldSmallest(slices);
+
+  const total = slices.reduce((sum, slice) => sum + slice.cents, 0);
+  const active = slices.find((slice) => slice.key === activeKey);
+  let turn = 0;
+
+  return (
+    <div className="donut">
+      <svg viewBox="0 0 200 200" role="img" aria-label={`Spending by category, ${money(total)} in total`} onMouseLeave={() => setActiveKey(null)}>
+        {slices.map((slice) => {
+          const start = turn;
+          turn += slice.cents / total;
+          return (
+            <path
+              key={slice.key}
+              className={slice.opens !== undefined ? "opens" : undefined}
+              d={ringSlice(start, turn, 92, 62)}
+              style={{ fill: slice.color, opacity: active && active !== slice ? 0.45 : 1 }}
+              stroke="var(--surface)"
+              strokeWidth={2}
+              onMouseEnter={() => setActiveKey(slice.key)}
+              onClick={() => slice.opens !== undefined && setOpenedId(slice.opens)}
+            />
+          );
+        })}
+        <text x={100} y={94} textAnchor="middle" className="donut-label">
+          {active ? `${Math.round((active.cents / total) * 100)}%` : opened ? "Subtotal" : "Spent"}
+        </text>
+        <text x={100} y={114} textAnchor="middle" className="donut-total">
+          {formatFigure(active?.cents ?? total)}
+        </text>
+      </svg>
+      <div className="donut-side">
+        {opened && (
+          <button type="button" className="ghost small" onClick={() => setOpenedId(null)}>
+            ‹ All categories
+          </button>
+        )}
+        <h3 className="field-label">{opened ? opened.name : "By category"}</h3>
+        <ul className="donut-legend">
+          {slices.map((slice) => {
+            const content = (
+              <>
+                <i className="key" style={{ background: slice.color }} />
+                <span className="donut-name">{slice.name}</span>
+                <span className="num">{money(slice.cents)}</span>
+                <span className="num hint">{Math.round((slice.cents / total) * 100)}%</span>
+              </>
+            );
+            return (
+              <li key={slice.key} onMouseEnter={() => setActiveKey(slice.key)} onMouseLeave={() => setActiveKey(null)}>
+                {slice.opens !== undefined ? (
+                  <button
+                    type="button"
+                    className="donut-row"
+                    onClick={() => setOpenedId(slice.opens as number)}
+                    onFocus={() => setActiveKey(slice.key)}
+                    onBlur={() => setActiveKey(null)}
+                    aria-label={`${slice.name}, ${money(slice.cents)}. Show subcategories`}
+                  >
+                    {content}
+                  </button>
+                ) : (
+                  <div className="donut-row">{content}</div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
     </div>
   );
 }

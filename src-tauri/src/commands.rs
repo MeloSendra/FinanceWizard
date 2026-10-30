@@ -1,7 +1,8 @@
 use crate::backup::{self, Settings};
 use crate::categories::{self, Category, CategoryInput};
 use crate::error::{AppError, Result};
-use crate::recurring::{self, RecurringInput, RecurringItem, ValueRecord};
+use crate::purge;
+use crate::recurring::{self, MissedPayment, RecurringInput, RecurringItem, ValueRecord};
 use crate::reports::{self, MonthReport};
 use crate::transactions::{self, Transaction, TransactionFilter, TransactionInput};
 use crate::vault::{self, DATABASE_FILE, Key, Status};
@@ -209,6 +210,16 @@ pub fn delete_recurring_value(db: State<Database>, id: i64) -> Result<()> {
 }
 
 #[tauri::command]
+pub fn missed_payments(db: State<Database>, id: i64) -> Result<Vec<MissedPayment>> {
+    recurring::missed_payments(&*db.lock()?, id, today())
+}
+
+#[tauri::command]
+pub fn add_missed_payments(db: State<Database>, id: i64, dates: Vec<String>) -> Result<usize> {
+    recurring::add_missed_payments(&mut *db.lock()?, id, &dates, today())
+}
+
+#[tauri::command]
 pub fn month_report(db: State<Database>, month: String) -> Result<MonthReport> {
     reports::month_report(&*db.lock()?, &month, today())
 }
@@ -263,6 +274,12 @@ pub fn backup_database(app: AppHandle, db: State<Database>, passphrase: String) 
     Ok(true)
 }
 
+fn safety_path(db: &Database, name: &str) -> Result<PathBuf> {
+    let directory = db.directory.join("safety-backups");
+    fs::create_dir_all(&directory)?;
+    Ok(directory.join(format!("{name}-{}.sqlite", timestamp("%Y-%m-%d-%H%M%S"))))
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupChoice {
@@ -291,9 +308,7 @@ pub fn choose_backup(app: AppHandle, db: State<Database>) -> Result<Option<Backu
 #[tauri::command(async)]
 pub fn restore_database(db: State<Database>, path: PathBuf, passphrase: Option<String>) -> Result<()> {
     let passphrase = passphrase.map(Zeroizing::new);
-    let directory = db.directory.join("safety-backups");
-    fs::create_dir_all(&directory)?;
-    let safety = directory.join(format!("before-restore-{}.sqlite", timestamp("%Y-%m-%d-%H%M%S")));
+    let safety = safety_path(&db, "before-restore")?;
     let mut unlocked = db.lock()?;
     let session = unlocked.session();
     let key = session.key.sql();
@@ -310,4 +325,29 @@ pub fn export_transactions(app: AppHandle, db: State<Database>) -> Result<bool> 
     let csv = backup::transactions_csv(&*db.lock()?)?;
     fs::write(path, csv)?;
     Ok(true)
+}
+
+#[tauri::command]
+pub fn count_transactions(db: State<Database>, from: String, to: String) -> Result<i64> {
+    purge::count_transactions(&*db.lock()?, &from, &to)
+}
+
+// A purge first saves a copy that Restore from backup can bring back.
+
+#[tauri::command(async)]
+pub fn purge_transactions(db: State<Database>, from: String, to: String) -> Result<usize> {
+    let safety = safety_path(&db, "before-purge")?;
+    let mut unlocked = db.lock()?;
+    let session = unlocked.session();
+    crate::db::export_to(&session.conn, &safety, &session.key.sql())?;
+    purge::delete_transactions(&session.conn, &from, &to)
+}
+
+#[tauri::command(async)]
+pub fn reset_all_data(db: State<Database>) -> Result<()> {
+    let safety = safety_path(&db, "before-reset")?;
+    let mut unlocked = db.lock()?;
+    let session = unlocked.session();
+    crate::db::export_to(&session.conn, &safety, &session.key.sql())?;
+    purge::reset_all(&mut session.conn)
 }

@@ -1,8 +1,10 @@
-import { api } from "../api";
+import { useState } from "react";
+import { api, type MonthReport } from "../api";
+import { coinDropEnabled, comparisonText, GoldPieces, loadCoins, Treasure } from "../coins";
 import { useApp, useLoad } from "../state";
 import { TrendChart } from "../charts";
-import { formatDate } from "../format";
-import { Empty, Money, MonthNav } from "../ui";
+import { formatDate, formatMoney } from "../format";
+import { CategoryChip, Empty, Money, MonthNav } from "../ui";
 
 function greeting(): string {
   const hour = new Date().getHours();
@@ -18,6 +20,43 @@ export function OverBudget() {
       </svg>
       Over budget
     </span>
+  );
+}
+
+function MoneyRemaining({ report }: { report: MonthReport }) {
+  const { settings, droppedCoins, clearDroppedCoins } = useApp();
+  const [coins] = useState(loadCoins);
+  const remaining = report.incomeCents - report.projectedCents;
+  const className = `stat-value${remaining < 0 ? " negative" : ""}`;
+  const real = <Money cents={remaining} />;
+
+  return (
+    <div className="card">
+      <div className="stat-label">Money remaining</div>
+      <div className={className}>
+        {coins.style === "gold" ? (
+          <GoldPieces cents={remaining} real={formatMoney(remaining, settings.currency)} />
+        ) : coins.style === "comparison" ? (
+          comparisonText(remaining, coins)
+        ) : (
+          real
+        )}
+      </div>
+      {coins.style === "comparison" && <div className="hint">{real}</div>}
+      {report.upcomingCents > 0 && (
+        <div className="hint">
+          after <Money cents={report.upcomingCents} /> still due
+        </div>
+      )}
+      {coins.style === "treasure" && (
+        <Treasure
+          remainingCents={remaining}
+          incomeCents={report.incomeCents}
+          dropped={coinDropEnabled(coins) ? droppedCoins : 0}
+          onDropped={clearDroppedCoins}
+        />
+      )}
+    </div>
   );
 }
 
@@ -43,6 +82,7 @@ export default function Dashboard() {
             <Money cents={report.spentCents} />
           </div>
         </div>
+        <MoneyRemaining report={report} />
         <div className="card">
           <div className="stat-label">Projected end of month</div>
           <div className="stat-value">
@@ -83,7 +123,7 @@ export default function Dashboard() {
             alerts.map((row) => (
               <div className="status-line" key={row.categoryId}>
                 <span>
-                  {row.name}
+                  <CategoryChip id={row.categoryId} name={row.name} />
                   <br />
                   <span className="hint">
                     <Money cents={row.projectedCents} /> of <Money cents={row.budgetCents ?? 0} />

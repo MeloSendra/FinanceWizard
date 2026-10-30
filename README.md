@@ -63,7 +63,7 @@ Protection depends on your Windows login: someone who has both your Windows pass
 
 **Settings > Back up now** writes a single encrypted `.sqlite` file wherever you choose, locked with a passphrase of 12 or more characters. The passphrase is not stored, and only it can open the backup, on any computer. Keep it in a password manager, and keep the file on another drive or in cloud storage, since the app has no copy of its own outside this computer. The date of the last backup is shown in the sidebar and in Settings.
 
-**Restore from backup** replaces all current data with the chosen file. The app first saves the current data to `%APPDATA%\com.financewizard.app\safety-backups\`, so a restore can be undone by restoring that file. It keeps a similar copy before an update changes the database. Safety copies use the database key and need no passphrase. Unencrypted backups from version 0.1.0 can still be restored. Files that are not FinanceWizard backups, are damaged, or come from a newer version are rejected without changing anything.
+**Restore from backup** replaces all current data with the chosen file. The app first saves the current data to `%APPDATA%\com.financewizard.app\safety-backups\`, so a restore can be undone by restoring that file. It keeps a similar copy before an update changes the database. After such an update, older versions of the app cannot open the data. Safety copies use the database key and need no passphrase. Unencrypted backups from version 0.1.0 can still be restored. Files that are not FinanceWizard backups, are damaged, or come from a newer version are rejected without changing anything.
 
 ## Export
 
@@ -72,3 +72,21 @@ Protection depends on your Windows login: someone who has both your Windows pass
 ## Scheduled payments
 
 The app only runs while it is open, so scheduled payments are created when you start it, including any dates missed while it was closed. They post automatically. To correct one, edit or delete the transaction; a deleted payment does not come back.
+
+An item with a start date in the past does not create payments for those dates by itself. They are listed under **Past payments** on the item instead, where you tick the ones to add. This opens automatically after you create such an item. For financing, dates covered by "Installments already paid" are not listed.
+
+## Categories
+
+Categories have two levels: parents and subcategories. A parent has a color of your choice, and its subcategories use darker shades of it.
+
+## Appearance
+
+**Settings > Appearance** offers System, Light, Dim, Dark, and Custom. Custom takes a background and an accent, and picks readable text colors for you. The Money remaining card can also change style: Plain, Treasure, Gold pieces, or Comparison, which counts it in something you choose, such as coffees. Treasure shows a pile based on the share of this month's income you have left, and coins fall onto it when the app opens and a scheduled payment has gone out. The falling coins follow the Windows animation setting unless you choose otherwise. These choices are stored for this Windows account rather than in the database, so backups do not include them.
+
+## Deleting data
+
+**Settings > Danger zone** deletes the transactions between two dates, or resets all data. Reset removes transactions, recurring items, budgets, and categories, and keeps your PIN, recovery key, and currency. Both save a copy to `safety-backups\` first, which **Restore from backup** can bring back. Those copies stay on disk, encrypted, until you delete them.
+
+## License
+
+[MIT](LICENSE)

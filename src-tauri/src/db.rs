@@ -10,7 +10,10 @@ use std::path::{Path, PathBuf};
 /// Marks a SQLite file as ours, so restore can reject unrelated databases.
 pub const APPLICATION_ID: i32 = 0x4657_5A44;
 
-const MIGRATIONS: &[&str] = &[include_str!("../migrations/001_initial.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/001_initial.sql"),
+    include_str!("../migrations/002_category_color.sql"),
+];
 const PLAINTEXT_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
 /// `key` is passed to SQLCipher as is: a passphrase, or `x'<hex>'` for a raw key.
@@ -264,18 +267,33 @@ pub mod tests {
     }
 
     #[test]
-    fn opening_an_older_schema_saves_a_copy_first() {
+    fn opening_an_older_schema_saves_a_copy_then_upgrades_it() {
         let dir = TempDir::new("pre-update");
         let path = dir.0.join("db");
+        let conn = Connection::open(&path).unwrap();
+        apply_key(&conn, KEY).unwrap();
+        conn.execute_batch(MIGRATIONS[0]).unwrap();
+        conn.execute("INSERT INTO categories (name, kind) VALUES ('Food', 'expense')", []).unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        drop(conn);
+
         let conn = open(&path, KEY).unwrap();
+        let color: Option<String> = conn.query_row("SELECT color FROM categories WHERE name = 'Food'", [], |row| row.get(0)).unwrap();
+        assert_eq!(color, None);
+        assert_eq!(user_version(&conn).unwrap(), schema_version());
 
-        // No older schema exists yet, so the copy is taken at an older-looking
-        // version. An empty database (version 0) needs no copy.
-        save_before_migrating(&conn, &path, KEY).unwrap();
+        let copies: Vec<_> = fs::read_dir(dir.0.join("safety-backups")).unwrap().collect();
+        assert_eq!(copies.len(), 1);
+        let copy = Connection::open(copies.into_iter().next().unwrap().unwrap().path()).unwrap();
+        apply_key(&copy, KEY).unwrap();
+        assert_eq!(user_version(&copy).unwrap(), 1);
+    }
+
+    #[test]
+    fn an_up_to_date_or_empty_database_needs_no_copy() {
+        let dir = TempDir::new("no-copy");
+        drop(open(&dir.0.join("db"), KEY).unwrap());
+        drop(open(&dir.0.join("db"), KEY).unwrap());
         assert!(!dir.0.join("safety-backups").exists());
-
-        conn.pragma_update(None, "user_version", -1).unwrap();
-        save_before_migrating(&conn, &path, KEY).unwrap();
-        assert_eq!(fs::read_dir(dir.0.join("safety-backups")).unwrap().count(), 1);
     }
 }

@@ -239,7 +239,7 @@ mod tests {
     }
 
     fn category(conn: &Connection, name: &str, kind: Kind, parent_id: Option<i64>, budget: Option<i64>) -> i64 {
-        let input = CategoryInput { name: name.into(), kind, parent_id, default_budget_cents: budget };
+        let input = CategoryInput { name: name.into(), kind, parent_id, default_budget_cents: budget, color: None };
         categories::create(conn, &input).unwrap().id
     }
 

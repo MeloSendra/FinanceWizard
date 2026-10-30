@@ -2,9 +2,172 @@ import { getVersion } from "@tauri-apps/api/app";
 import { check } from "@tauri-apps/plugin-updater";
 import { useEffect, useState } from "react";
 import { api, type BackupChoice } from "../api";
-import { useApp } from "../state";
-import { formatDate } from "../format";
-import { Confirm, Dialog, Field, Form, FormError, useAction } from "../ui";
+import { useApp, useLoad } from "../state";
+import { coinDropEnabled, loadCoins, saveCoins, type CoinStyle } from "../coins";
+import { amountText, formatDate, parseAmount } from "../format";
+import { saveTheme, loadTheme, type ThemeMode } from "../theme";
+import { Confirm, Dialog, Field, Form, FormError, TypedConfirm, useAction } from "../ui";
+
+const THEMES: { mode: ThemeMode; label: string }[] = [
+  { mode: "system", label: "System" },
+  { mode: "light", label: "Light" },
+  { mode: "dim", label: "Dim" },
+  { mode: "dark", label: "Dark" },
+  { mode: "custom", label: "Custom" },
+];
+
+const COIN_STYLES: { style: CoinStyle; label: string }[] = [
+  { style: "plain", label: "Plain" },
+  { style: "treasure", label: "Treasure" },
+  { style: "gold", label: "Gold pieces" },
+  { style: "comparison", label: "Comparison" },
+];
+
+function Appearance() {
+  const [theme, setTheme] = useState(loadTheme);
+  const [coins, setCoins] = useState(loadCoins);
+  const [price, setPrice] = useState(amountText(coins.priceCents));
+
+  const changeCoins = (next: Partial<typeof coins>) => {
+    const updated = { ...coins, ...next };
+    setCoins(updated);
+    saveCoins(updated);
+  };
+
+  const changePrice = (text: string) => {
+    setPrice(text);
+    const priceCents = parseAmount(text);
+    if (priceCents) changeCoins({ priceCents });
+  };
+
+  const change = (next: Partial<typeof theme>) => {
+    const updated = { ...theme, ...next };
+    setTheme(updated);
+    saveTheme(updated);
+  };
+
+  return (
+    <section className="card">
+      <h2>Appearance</h2>
+      <div className="segmented" role="group" aria-label="Theme">
+        {THEMES.map(({ mode, label }) => (
+          <button key={mode} type="button" aria-pressed={theme.mode === mode} onClick={() => change({ mode })}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {theme.mode === "custom" && (
+        <div className="form-grid" style={{ marginTop: 12 }}>
+          <Field label="Background" hint="Text color adjusts so it stays readable.">
+            <input
+              type="color"
+              className="color-input"
+              value={theme.background}
+              onChange={(event) => change({ background: event.target.value })}
+            />
+          </Field>
+          <Field label="Accent">
+            <input type="color" className="color-input" value={theme.accent} onChange={(event) => change({ accent: event.target.value })} />
+          </Field>
+        </div>
+      )}
+      <h3 className="field-label" style={{ margin: "14px 0 6px" }}>
+        Money remaining
+      </h3>
+      <div className="segmented" role="group" aria-label="Money remaining style">
+        {COIN_STYLES.map(({ style, label }) => (
+          <button key={style} type="button" aria-pressed={coins.style === style} onClick={() => changeCoins({ style })}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {coins.style === "treasure" && (
+        <label className="check" style={{ marginTop: 12 }}>
+          <input
+            type="checkbox"
+            checked={coinDropEnabled(coins)}
+            onChange={(event) => changeCoins({ coinDrop: event.target.checked })}
+          />
+          Drop coins when a scheduled payment goes out
+        </label>
+      )}
+      {coins.style === "comparison" && (
+        <div className="form-grid" style={{ marginTop: 12 }}>
+          <Field label="Count it in" hint="In the plural, such as coffees.">
+            <input value={coins.item} onChange={(event) => changeCoins({ item: event.target.value })} />
+          </Field>
+          <Field label="Price of one">
+            <input inputMode="decimal" value={price} onChange={(event) => changePrice(event.target.value)} />
+          </Field>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DangerZone() {
+  const { refresh, notify } = useApp();
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [confirming, setConfirming] = useState<"range" | "reset" | null>(null);
+  const ready = Boolean(from && to && from <= to);
+  const count = useLoad(() => (ready ? api.countTransactions(from, to) : Promise.resolve(null)), [from, to]);
+
+  const safety = "A safety copy is saved first, and Restore from backup can bring it back from the app's safety-backups folder.";
+
+  return (
+    <section className="card danger-zone">
+      <h2>Danger zone</h2>
+      <p className="hint">Delete all transactions between two dates. Recurring items and budgets stay.</p>
+      <div className="form-grid" style={{ marginTop: 12 }}>
+        <Field label="From">
+          <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
+        </Field>
+        <Field label="To">
+          <input type="date" min={from || undefined} value={to} onChange={(event) => setTo(event.target.value)} />
+        </Field>
+      </div>
+      <div className="row" style={{ marginTop: 12 }}>
+        <button type="button" disabled={!ready || !count} onClick={() => setConfirming("range")}>
+          {ready && count !== null ? `Delete ${count} ${count === 1 ? "transaction" : "transactions"}` : "Delete transactions"}
+        </button>
+        <button type="button" className="danger" onClick={() => setConfirming("reset")}>
+          Reset all data
+        </button>
+      </div>
+      {confirming === "range" && (
+        <TypedConfirm
+          title={`Delete ${count} ${count === 1 ? "transaction" : "transactions"}?`}
+          message={`Everything from ${formatDate(from)} to ${formatDate(to)} is removed, and financing progress goes down to match. Deleted scheduled payments move to Past payments on their item. ${safety}`}
+          confirmLabel="Delete"
+          onClose={() => setConfirming(null)}
+          onConfirm={async () => {
+            await api.purgeTransactions(from, to);
+            setConfirming(null);
+            setFrom("");
+            setTo("");
+            refresh();
+            notify("Transactions deleted.");
+          }}
+        />
+      )}
+      {confirming === "reset" && (
+        <TypedConfirm
+          title="Reset all data?"
+          message={`Every transaction, recurring item, budget and category is removed. Your PIN, recovery key and currency stay. ${safety}`}
+          confirmLabel="Reset"
+          onClose={() => setConfirming(null)}
+          onConfirm={async () => {
+            await api.resetAllData();
+            setConfirming(null);
+            refresh();
+            notify("All data removed.");
+          }}
+        />
+      )}
+    </section>
+  );
+}
 
 function PassphraseDialog(props: {
   title: string;
@@ -186,6 +349,8 @@ export default function Settings() {
         <h1>Settings</h1>
       </header>
 
+      <Appearance />
+
       <section className="card">
         <h2>Backup</h2>
         <p className="hint">
@@ -237,6 +402,7 @@ export default function Settings() {
 
       <ChangePin />
       <Updates />
+      <DangerZone />
 
       <FormError message={error} />
 

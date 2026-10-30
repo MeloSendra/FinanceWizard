@@ -146,7 +146,7 @@ mod tests {
     use crate::db::test_connection;
 
     fn category(conn: &Connection, name: &str, kind: Kind, parent_id: Option<i64>) -> i64 {
-        let input = CategoryInput { name: name.into(), kind, parent_id, default_budget_cents: None };
+        let input = CategoryInput { name: name.into(), kind, parent_id, default_budget_cents: None, color: None };
         categories::create(conn, &input).unwrap().id
     }
 

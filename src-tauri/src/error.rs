@@ -7,6 +7,10 @@ pub enum AppError {
     Invalid(String),
     #[error("Not found")]
     NotFound,
+    #[error("The app is locked.")]
+    Locked,
+    #[error("That key or passphrase is wrong, or this is not a FinanceWizard file.")]
+    WrongKey,
     #[error("Database error: {0}")]
     Database(#[from] rusqlite::Error),
     #[error("File error: {0}")]

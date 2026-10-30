@@ -1,8 +1,7 @@
 use crate::db::{self, APPLICATION_ID};
-use crate::error::{Result, invalid};
+use crate::error::{AppError, Result, invalid};
 use crate::transactions::{self, TransactionFilter};
-use rusqlite::backup::Backup;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -10,6 +9,7 @@ use std::path::Path;
 const LAST_BACKUP: &str = "last_backup_at";
 const CURRENCY: &str = "currency";
 const DEFAULT_CURRENCY: &str = "EUR";
+const MIN_PASSPHRASE_LENGTH: usize = 12;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,19 +47,20 @@ pub fn set_currency(conn: &Connection, currency: &str) -> Result<()> {
     put_setting(conn, CURRENCY, currency)
 }
 
-/// Copies the database using SQLite's backup API, which stays consistent
-/// where copying the live file would not.
-fn copy_to_file(conn: &Connection, path: &Path) -> Result<()> {
-    if path.exists() {
-        fs::remove_file(path)?;
+fn check_passphrase(passphrase: &str) -> Result<()> {
+    if passphrase.chars().count() < MIN_PASSPHRASE_LENGTH {
+        return invalid(format!("The passphrase must be at least {MIN_PASSPHRASE_LENGTH} characters."));
     }
-    let mut target = Connection::open(path)?;
-    Backup::new(conn, &mut target)?.run_to_completion(256, std::time::Duration::ZERO, None)?;
     Ok(())
 }
 
-pub fn create_backup(conn: &Connection, path: &Path, now: &str) -> Result<()> {
-    copy_to_file(conn, path)?;
+/// Backups carry their own salt and need only the passphrase, not `vault.json`,
+/// so they can be restored on another computer.
+pub fn create_backup(conn: &Connection, path: &Path, passphrase: &str, now: &str) -> Result<()> {
+    check_passphrase(passphrase)?;
+    let temporary = db::sidecar(path, ".new");
+    db::export_to(conn, &temporary, passphrase)?;
+    fs::rename(&temporary, path)?;
     put_setting(conn, LAST_BACKUP, now)
 }
 
@@ -83,16 +84,48 @@ fn check_backup(source: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Plaintext files are 0.1.0 backups. Safety copies use the database key, and
+/// anything else needs the passphrase it was saved with. Opened with the default
+/// flags because the attached export target inherits them, and must be creatable.
+fn open_source(path: &Path, key: &str, passphrase: Option<&str>) -> Result<Connection> {
+    let source = Connection::open(path)?;
+    if !db::is_plaintext(path)? {
+        db::apply_key(&source, passphrase.unwrap_or(key))?;
+    }
+    Ok(source)
+}
+
+pub fn needs_passphrase(path: &Path, key: &str) -> Result<bool> {
+    match open_source(path, key, None) {
+        Ok(_) => Ok(false),
+        Err(AppError::WrongKey) => Ok(true),
+        Err(error) => Err(error),
+    }
+}
+
 /// Replaces all data with the backup, after saving the current data to
 /// `safety_path`. An invalid backup leaves the current data untouched.
-pub fn restore_backup(conn: &mut Connection, path: &Path, safety_path: &Path) -> Result<()> {
-    let source = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+pub fn restore_backup(
+    conn: &mut Connection,
+    database: &Path,
+    key: &str,
+    path: &Path,
+    passphrase: Option<&str>,
+    safety_path: &Path,
+) -> Result<()> {
+    let source = open_source(path, key, passphrase)?;
     check_backup(&source)?;
-    copy_to_file(conn, safety_path)?;
+    db::export_to(conn, safety_path, key)?;
     let last_backup = get_setting(conn, LAST_BACKUP)?;
-    Backup::new(&source, conn)?.run_to_completion(256, std::time::Duration::ZERO, None)?;
-    db::configure(conn)?;
-    db::migrate(conn)?;
+    let temporary = db::sidecar(database, ".restoring");
+    db::export_to(&source, &temporary, key)?;
+    drop(source);
+
+    // The database file can only be replaced while nothing has it open.
+    drop(std::mem::replace(conn, Connection::open_in_memory()?));
+    let replaced = fs::rename(&temporary, database);
+    *conn = db::open(database, key)?;
+    replaced?;
     if let Some(value) = last_backup {
         put_setting(conn, LAST_BACKUP, &value)?;
     }
@@ -139,25 +172,11 @@ mod tests {
     use super::*;
     use crate::categories::{self, CategoryInput, Kind};
     use crate::db::test_connection;
+    use crate::db::tests::TempDir;
     use crate::transactions::TransactionInput;
-    use std::path::PathBuf;
 
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn new(name: &str) -> Self {
-            let path = std::env::temp_dir().join(format!("financewizard-{name}-{}", std::process::id()));
-            let _ = fs::remove_dir_all(&path);
-            fs::create_dir_all(&path).unwrap();
-            TempDir(path)
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
+    const KEY: &str = "x'00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'";
+    const PASSPHRASE: &str = "correct horse battery";
 
     fn seed(conn: &Connection, name: &str, description: &str) {
         let input = CategoryInput { name: name.into(), kind: Kind::Expense, parent_id: None, default_budget_cents: None };
@@ -176,24 +195,93 @@ mod tests {
         conn.query_row("SELECT COUNT(*) FROM transactions", [], |row| row.get(0)).unwrap()
     }
 
+    fn restore(conn: &mut Connection, dir: &TempDir, backup: &Path, passphrase: Option<&str>) -> Result<()> {
+        restore_backup(conn, &dir.0.join("live.sqlite"), KEY, backup, passphrase, &dir.0.join("safety.sqlite"))
+    }
+
+    fn live(dir: &TempDir) -> Connection {
+        db::open(&dir.0.join("live.sqlite"), KEY).unwrap()
+    }
+
     #[test]
     fn restore_brings_back_the_backup_and_keeps_a_safety_copy() {
         let dir = TempDir::new("restore");
-        let (backup, safety) = (dir.0.join("backup.sqlite"), dir.0.join("safety.sqlite"));
-        let mut conn = test_connection();
+        let backup = dir.0.join("backup.sqlite");
+        let mut conn = live(&dir);
         seed(&conn, "Food", "");
-        create_backup(&conn, &backup, "2026-01-06T10:00:00").unwrap();
+        create_backup(&conn, &backup, PASSPHRASE, "2026-01-06T10:00:00").unwrap();
         seed(&conn, "Fun", "");
         assert_eq!(count(&conn), 2);
 
-        restore_backup(&mut conn, &backup, &safety).unwrap();
+        restore(&mut conn, &dir, &backup, Some(PASSPHRASE)).unwrap();
         assert_eq!(count(&conn), 1);
         assert_eq!(settings(&conn).unwrap().last_backup_at.as_deref(), Some("2026-01-06T10:00:00"));
 
-        let saved = Connection::open(&safety).unwrap();
+        let saved = Connection::open(dir.0.join("safety.sqlite")).unwrap();
+        db::apply_key(&saved, KEY).unwrap();
         assert_eq!(count(&saved), 2);
         let enabled: i64 = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0)).unwrap();
         assert_eq!(enabled, 1);
+
+        // The replaced file is the one the app reopens.
+        seed(&conn, "After", "");
+        drop(conn);
+        assert_eq!(count(&live(&dir)), 2);
+    }
+
+    #[test]
+    fn backups_are_encrypted_and_need_their_passphrase() {
+        let dir = TempDir::new("passphrase");
+        let backup = dir.0.join("backup.sqlite");
+        let mut conn = live(&dir);
+        seed(&conn, "Food", "a secret purchase");
+        create_backup(&conn, &backup, PASSPHRASE, "now").unwrap();
+
+        assert!(!db::is_plaintext(&backup).unwrap());
+        assert!(needs_passphrase(&backup, KEY).unwrap());
+        assert!(matches!(restore(&mut conn, &dir, &backup, Some("the wrong passphrase")), Err(AppError::WrongKey)));
+        assert!(matches!(restore(&mut conn, &dir, &backup, None), Err(AppError::WrongKey)));
+        assert!(!dir.0.join("safety.sqlite").exists());
+    }
+
+    #[test]
+    fn short_passphrases_are_refused() {
+        let dir = TempDir::new("short");
+        let backup = dir.0.join("backup.sqlite");
+        assert!(create_backup(&live(&dir), &backup, "too short", "now").is_err());
+        assert!(!backup.exists());
+    }
+
+    #[test]
+    fn a_safety_copy_restores_with_the_database_key() {
+        let dir = TempDir::new("safety");
+        let copy = dir.0.join("copy.sqlite");
+        let mut conn = live(&dir);
+        seed(&conn, "Food", "");
+        db::export_to(&conn, &copy, KEY).unwrap();
+        seed(&conn, "Fun", "");
+
+        assert!(!needs_passphrase(&copy, KEY).unwrap());
+        restore(&mut conn, &dir, &copy, None).unwrap();
+        assert_eq!(count(&conn), 1);
+    }
+
+    #[test]
+    fn a_plaintext_backup_from_the_first_version_restores_encrypted() {
+        let dir = TempDir::new("plain-backup");
+        let backup = dir.0.join("old.sqlite");
+        let old = Connection::open(&backup).unwrap();
+        db::configure(&old).unwrap();
+        db::migrate(&old).unwrap();
+        seed(&old, "Food", "");
+        drop(old);
+
+        let mut conn = live(&dir);
+        assert!(!needs_passphrase(&backup, KEY).unwrap());
+        restore(&mut conn, &dir, &backup, None).unwrap();
+        assert_eq!(count(&conn), 1);
+        drop(conn);
+        assert!(!db::is_plaintext(&dir.0.join("live.sqlite")).unwrap());
     }
 
     #[test]
@@ -203,25 +291,26 @@ mod tests {
         fs::write(&text, "not a database, just some text that is long enough").unwrap();
         let other = dir.0.join("other.sqlite");
         Connection::open(&other).unwrap().execute_batch("CREATE TABLE x (y);").unwrap();
-        let safety = dir.0.join("safety.sqlite");
 
-        let mut conn = test_connection();
+        let mut conn = live(&dir);
         seed(&conn, "Food", "");
-        assert!(restore_backup(&mut conn, &text, &safety).is_err());
-        assert!(restore_backup(&mut conn, &other, &safety).is_err());
+        assert!(restore(&mut conn, &dir, &text, Some(PASSPHRASE)).is_err());
+        assert!(restore(&mut conn, &dir, &other, None).is_err());
         assert_eq!(count(&conn), 1);
-        assert!(!safety.exists());
+        assert!(!dir.0.join("safety.sqlite").exists());
     }
 
     #[test]
     fn rejects_backups_from_a_newer_version() {
         let dir = TempDir::new("newer");
         let backup = dir.0.join("backup.sqlite");
-        let conn = test_connection();
-        create_backup(&conn, &backup, "now").unwrap();
-        Connection::open(&backup).unwrap().pragma_update(None, "user_version", 999).unwrap();
-        let mut conn = test_connection();
-        assert!(restore_backup(&mut conn, &backup, &dir.0.join("safety.sqlite")).is_err());
+        let mut conn = live(&dir);
+        create_backup(&conn, &backup, PASSPHRASE, "now").unwrap();
+        let copy = Connection::open(&backup).unwrap();
+        db::apply_key(&copy, PASSPHRASE).unwrap();
+        copy.pragma_update(None, "user_version", 999).unwrap();
+        drop(copy);
+        assert!(restore(&mut conn, &dir, &backup, Some(PASSPHRASE)).is_err());
     }
 
     #[test]

@@ -72,3 +72,7 @@ Protection depends on your Windows login: someone who has both your Windows pass
 ## Scheduled payments
 
 The app only runs while it is open, so scheduled payments are created when you start it, including any dates missed while it was closed. They post automatically. To correct one, edit or delete the transaction; a deleted payment does not come back.
+
+## License
+
+[MIT](LICENSE)

@@ -2,6 +2,7 @@
 name = "financewizard"
 version = "0.2.0"
 description = "A local personal finance manager"
+license = "MIT"
 authors = ["Josse Sendra"]
 edition = "2024"
 

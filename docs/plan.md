@@ -20,7 +20,7 @@ The owner has confirmed this direction: Windows-only, local desktop, web UI in a
 Included:
 
 - Manual creation, editing, viewing, and deletion of categories.
-- Parent/child category hierarchy with validation against cycles and invalid deletion.
+- Two-level parent/child category hierarchy with validation against cycles and invalid deletion.
 - Manual income and expense transactions.
 - Monthly transaction views with filtering by date, type, and category.
 - Recurring items for financing and subscriptions.

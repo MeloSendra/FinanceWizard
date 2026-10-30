@@ -501,7 +501,11 @@ tfoot td {
   color: var(--good-ink);
 }
 
-.expense-text,
+/* Softer than the over-budget red, since most rows use it. */
+.expense-text {
+  color: color-mix(in srgb, var(--critical-ink) 65%, var(--ink-2));
+}
+
 .negative {
   color: var(--critical-ink);
 }

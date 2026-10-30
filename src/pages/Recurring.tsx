@@ -3,7 +3,7 @@ import { api, type Frequency, type ItemType, type RecurringItem, type Status, ty
 import { useApp, useLoad } from "../state";
 import { ValueChart } from "../charts";
 import { amountText, formatDate, formatFigure, parseAmount, todayIso } from "../format";
-import { CategorySelect, Confirm, Dialog, Empty, Field, Form, FormError, Money, useAction } from "../ui";
+import { CategoryChip, CategorySelect, Confirm, Dialog, Empty, Field, Form, FormError, Money, useAction } from "../ui";
 
 const FREQUENCY: Record<Frequency, string> = { monthly: "per month", quarterly: "per quarter", yearly: "per year" };
 
@@ -43,7 +43,7 @@ function ItemCard({ item, onOpen }: { item: RecurringItem; onOpen: () => void })
         </div>
       )}
       <div className="meta">
-        {item.categoryName} ·{" "}
+        <CategoryChip id={item.categoryId} name={item.categoryName} /> ·{" "}
         {item.status === "completed"
           ? "Completed"
           : item.nextPaymentDate
@@ -51,6 +51,58 @@ function ItemCard({ item, onOpen }: { item: RecurringItem; onOpen: () => void })
             : "No schedule"}
       </div>
     </div>
+  );
+}
+
+/** Lists scheduled dates with no payment on record, such as those from before
+ * the item was entered. Only runs when asked, so history is never changed
+ * behind the user's back. */
+function PastPayments({ item }: { item: RecurringItem }) {
+  const { refresh, notify } = useApp();
+  const { error, busy, run } = useAction();
+  const missed = useLoad(() => api.missedPayments(item.id), [item.id]);
+  const [skipped, setSkipped] = useState<string[]>([]);
+  if (!missed || missed.length === 0) return null;
+  const chosen = missed.filter((payment) => !skipped.includes(payment.date)).map((payment) => payment.date);
+
+  const add = () =>
+    run(async () => {
+      const created = await api.addMissedPayments(item.id, chosen);
+      setSkipped([]);
+      refresh();
+      notify(`${created} past ${created === 1 ? "payment" : "payments"} added.`);
+    });
+
+  return (
+    <section className="stack past-payments">
+      <div>
+        <h2>Past payments</h2>
+        <p className="hint">These dates have no payment on record. Untick any you don't want added.</p>
+      </div>
+      <div>
+        {missed.map((payment) => (
+          <label className="check status-line" key={payment.date}>
+            <input
+              type="checkbox"
+              checked={!skipped.includes(payment.date)}
+              onChange={(event) =>
+                setSkipped(event.target.checked ? skipped.filter((date) => date !== payment.date) : [...skipped, payment.date])
+              }
+            />
+            <span>{formatDate(payment.date)}</span>
+            <span className="num past-amount">
+              <Money cents={payment.amountCents} />
+            </span>
+          </label>
+        ))}
+      </div>
+      <FormError message={error} />
+      <div className="row">
+        <button type="button" className="primary" disabled={busy || chosen.length === 0} onClick={add}>
+          Add {chosen.length} {chosen.length === 1 ? "payment" : "payments"}
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -156,7 +208,13 @@ function ValueHistory({ item }: { item: RecurringItem }) {
   );
 }
 
-function ItemDialog({ item, itemType, onClose }: { item: RecurringItem | null; itemType: ItemType; onClose: () => void }) {
+function ItemDialog(props: {
+  item: RecurringItem | null;
+  itemType: ItemType;
+  onClose: () => void;
+  onCreated?: (id: number) => void;
+}) {
+  const { item, itemType, onClose } = props;
   const { refresh } = useApp();
   const { error, setError, busy, run } = useAction();
   const [name, setName] = useState(item?.name ?? "");
@@ -198,15 +256,18 @@ function ItemDialog({ item, itemType, onClose }: { item: RecurringItem | null; i
       openingPaidInstallments: Number(openingInstallments || 0),
     };
     run(async () => {
-      await (item ? api.updateRecurring(item.id, input) : api.createRecurring(input, amountCents));
+      const saved = await (item ? api.updateRecurring(item.id, input) : api.createRecurring(input, amountCents));
       await api.generateDuePayments();
+      const missed = item ? [] : await api.missedPayments(saved.id);
       refresh();
       onClose();
+      if (missed.length > 0) props.onCreated?.(saved.id);
     });
   };
 
   return (
     <Dialog title={`${item ? "Edit" : "New"} ${financing ? "financing" : "subscription"}`} onClose={onClose}>
+      {item && <PastPayments item={item} />}
       <Form onSubmit={save}>
         <Field label="Name">
           <input required autoFocus value={name} onChange={(event) => setName(event.target.value)} />
@@ -255,7 +316,7 @@ function ItemDialog({ item, itemType, onClose }: { item: RecurringItem | null; i
               <Field label="Already paid" hint="Down payment or earlier payments. Creates no transaction.">
                 <input inputMode="decimal" value={openingPaid} onChange={(event) => setOpeningPaid(event.target.value)} />
               </Field>
-              <Field label="Installments already paid">
+              <Field label="Installments already paid" hint="These dates are not listed as past payments.">
                 <input type="number" min={0} value={openingInstallments} onChange={(event) => setOpeningInstallments(event.target.value)} />
               </Field>
             </div>
@@ -350,7 +411,7 @@ export default function Recurring() {
       )}
       <Section title="Financing" items={items?.filter((item) => item.itemType === "financing") ?? []} onOpen={open} />
       <Section title="Subscriptions" items={items?.filter((item) => item.itemType === "subscription") ?? []} onOpen={open} />
-      {creating && <ItemDialog item={null} itemType={creating} onClose={() => setCreating(null)} />}
+      {creating && <ItemDialog item={null} itemType={creating} onClose={() => setCreating(null)} onCreated={setEditingId} />}
       {editing && <ItemDialog key={editing.id} item={editing} itemType={editing.itemType} onClose={() => setEditingId(null)} />}
     </div>
   );

@@ -2,7 +2,7 @@ import { api } from "../api";
 import { useApp, useLoad } from "../state";
 import { TrendChart } from "../charts";
 import { formatDate } from "../format";
-import { Empty, Money, MonthNav } from "../ui";
+import { CategoryChip, Empty, Money, MonthNav } from "../ui";
 
 function greeting(): string {
   const hour = new Date().getHours();
@@ -27,6 +27,7 @@ export default function Dashboard() {
   if (!report) return null;
 
   const alerts = report.rows.filter((row) => row.budgetCents !== null && row.projectedCents > row.budgetCents);
+  const remaining = report.incomeCents - report.projectedCents;
   const isEmpty = report.trend.every((point) => point.incomeCents === 0 && point.expenseCents === 0);
 
   return (
@@ -42,6 +43,17 @@ export default function Dashboard() {
           <div className="hero-value">
             <Money cents={report.spentCents} />
           </div>
+        </div>
+        <div className="card">
+          <div className="stat-label">Money remaining</div>
+          <div className={`stat-value${remaining < 0 ? " negative" : ""}`}>
+            <Money cents={remaining} />
+          </div>
+          {report.upcomingCents > 0 && (
+            <div className="hint">
+              after <Money cents={report.upcomingCents} /> still due
+            </div>
+          )}
         </div>
         <div className="card">
           <div className="stat-label">Projected end of month</div>
@@ -83,7 +95,7 @@ export default function Dashboard() {
             alerts.map((row) => (
               <div className="status-line" key={row.categoryId}>
                 <span>
-                  {row.name}
+                  <CategoryChip id={row.categoryId} name={row.name} />
                   <br />
                   <span className="hint">
                     <Money cents={row.projectedCents} /> of <Money cents={row.budgetCents ?? 0} />

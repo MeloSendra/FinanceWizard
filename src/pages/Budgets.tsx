@@ -1,9 +1,19 @@
 import { useState } from "react";
 import { api, type BudgetRow } from "../api";
 import { useApp, useLoad } from "../state";
+import { CategoryDonut } from "../charts";
 import { amountText, parseAmount } from "../format";
-import { Empty, Money, MonthNav } from "../ui";
+import { CategoryChip, Empty, Money, MonthNav } from "../ui";
 import { OverBudget } from "./Dashboard";
+
+/** Red once the amount passes the budget. */
+function Against({ cents, budgetCents }: { cents: number; budgetCents: number | null }) {
+  return (
+    <td className={`num${budgetCents !== null && cents > budgetCents ? " negative" : ""}`}>
+      <Money cents={cents} />
+    </td>
+  );
+}
 
 function Meter({ row }: { row: BudgetRow }) {
   const scale = Math.max(row.budgetCents ?? 0, row.projectedCents, 1);
@@ -60,6 +70,12 @@ export default function Budgets() {
         <h1>Budgets</h1>
         <MonthNav />
       </header>
+      {report && report.spentCents > 0 && (
+        <section className="card">
+          <h2>Where the money went</h2>
+          <CategoryDonut rows={report.rows} />
+        </section>
+      )}
       <section className="card flush">
         {report?.rows.length === 0 ? (
           <Empty title="No expense categories yet">Add a category to start planning.</Empty>
@@ -78,7 +94,7 @@ export default function Budgets() {
               {report?.rows.map((row) => (
                 <tr key={row.categoryId}>
                   <td style={{ paddingLeft: 14 + row.depth * 18 }}>
-                    {row.name}
+                    <CategoryChip id={row.categoryId} name={row.name} />
                     {row.budgetCents !== null && row.projectedCents > row.budgetCents && (
                       <>
                         <br />
@@ -97,12 +113,8 @@ export default function Budgets() {
                       </>
                     )}
                   </td>
-                  <td className="num">
-                    <Money cents={row.spentCents} />
-                  </td>
-                  <td className="num">
-                    <Money cents={row.projectedCents} />
-                  </td>
+                  <Against cents={row.spentCents} budgetCents={row.budgetCents} />
+                  <Against cents={row.projectedCents} budgetCents={row.budgetCents} />
                   <td className="meter-column">{row.budgetCents !== null && <Meter row={row} />}</td>
                 </tr>
               ))}
@@ -112,12 +124,8 @@ export default function Budgets() {
                 <tr>
                   <td>Total</td>
                   <td className="num">{report.budgetCents === null ? "–" : <Money cents={report.budgetCents} />}</td>
-                  <td className="num">
-                    <Money cents={report.spentCents} />
-                  </td>
-                  <td className="num">
-                    <Money cents={report.projectedCents} />
-                  </td>
+                  <Against cents={report.spentCents} budgetCents={report.budgetCents} />
+                  <Against cents={report.projectedCents} budgetCents={report.budgetCents} />
                   <td className="meter-column" />
                 </tr>
               </tfoot>

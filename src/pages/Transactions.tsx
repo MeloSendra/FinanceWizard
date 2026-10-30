@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { api, type Kind, type Transaction } from "../api";
 import { useApp, useLoad } from "../state";
-import { amountText, formatDate, monthBounds, parseAmount, todayIso } from "../format";
-import { CategorySelect, Confirm, Dialog, Empty, Field, Form, FormError, Money, MonthNav, useAction } from "../ui";
+import { WeekChart } from "../charts";
+import { addDays, amountText, formatDate, formatDayMonth, monthBounds, parseAmount, startOfWeek, todayIso, weekForMonth } from "../format";
+import { CategoryChip, CategorySelect, Confirm, Dialog, Empty, Field, Form, FormError, Money, MonthNav, useAction } from "../ui";
 
 function TransactionDialog({ transaction, onClose }: { transaction: Transaction | null; onClose: () => void }) {
   const { categories, refresh } = useApp();
@@ -112,6 +113,71 @@ function TransactionDialog({ transaction, onClose }: { transaction: Transaction 
   );
 }
 
+function Summary({ transactions }: { transactions: Transaction[] }) {
+  const sum = (kind: Kind) =>
+    transactions.filter((entry) => entry.kind === kind).reduce((total, entry) => total + entry.amountCents, 0);
+  const income = sum("income");
+  const expenses = sum("expense");
+  const net = income - expenses;
+  return (
+    <section className="summary" aria-label="Totals for these transactions">
+      <div className="card">
+        <div className="stat-label">Income</div>
+        <div className="stat-value income-text">
+          +<Money cents={income} />
+        </div>
+      </div>
+      <div className="card">
+        <div className="stat-label">Expenses</div>
+        <div className="stat-value expense-text">
+          −<Money cents={expenses} />
+        </div>
+      </div>
+      <div className="card">
+        <div className="stat-label">Net</div>
+        <div className={`stat-value ${net < 0 ? "expense-text" : "income-text"}`}>
+          <Money cents={net} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function WeekSpending({ week, setWeek, categoryId }: { week: string; setWeek: (week: string) => void; categoryId: number | null }) {
+  const last = addDays(week, 6);
+  const expenses = useLoad(() => api.listTransactions({ from: week, to: last, kind: "expense", categoryId }), [week, categoryId]);
+  if (!expenses) return null;
+  const days = Array.from({ length: 7 }, (_, index) => {
+    const date = addDays(week, index);
+    const cents = expenses.filter((entry) => entry.date === date).reduce((total, entry) => total + entry.amountCents, 0);
+    return { date, cents };
+  });
+  return (
+    <section className="card">
+      <div className="chart-head">
+        <h2>Spending by day</h2>
+        <div className="month-nav" role="group" aria-label="Week">
+          <button type="button" aria-label="Previous week" onClick={() => setWeek(addDays(week, -7))}>
+            ‹
+          </button>
+          <span aria-live="polite">
+            {formatDayMonth(week)} – {formatDayMonth(last)}
+          </span>
+          <button type="button" aria-label="Next week" onClick={() => setWeek(addDays(week, 7))}>
+            ›
+          </button>
+          {week !== startOfWeek(todayIso()) && (
+            <button type="button" className="ghost" onClick={() => setWeek(startOfWeek(todayIso()))}>
+              This week
+            </button>
+          )}
+        </div>
+      </div>
+      <WeekChart days={days} />
+    </section>
+  );
+}
+
 export default function Transactions() {
   const { month, categories } = useApp();
   const bounds = monthBounds(month);
@@ -120,6 +186,7 @@ export default function Transactions() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [editing, setEditing] = useState<Transaction | "new" | null>(null);
+  const [week, setWeek] = useState(weekForMonth(month));
 
   // The day filters narrow the selected month and reset when it changes.
   const [filterMonth, setFilterMonth] = useState(month);
@@ -127,6 +194,7 @@ export default function Transactions() {
     setFilterMonth(month);
     setFrom("");
     setTo("");
+    setWeek(weekForMonth(month));
   }
 
   const transactions = useLoad(
@@ -165,6 +233,9 @@ export default function Transactions() {
         </Field>
       </section>
 
+      {transactions && <Summary transactions={transactions} />}
+      <WeekSpending week={week} setWeek={setWeek} categoryId={categoryId} />
+
       <section className="card flush">
         {transactions?.length === 0 ? (
           <Empty title="No transactions here">
@@ -194,8 +265,10 @@ export default function Transactions() {
                     {transaction.description || <span className="hint">No description</span>}
                     {transaction.recurringItemName && <span className="tag">{transaction.recurringItemName}</span>}
                   </td>
-                  <td>{transaction.categoryName}</td>
-                  <td className="num">
+                  <td>
+                    <CategoryChip id={transaction.categoryId} name={transaction.categoryName} />
+                  </td>
+                  <td className={`num ${transaction.kind === "income" ? "income-text" : "expense-text"}`}>
                     {transaction.kind === "income" ? "+" : "−"}
                     <Money cents={transaction.amountCents} />
                   </td>

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { api, type Category, type Kind } from "../api";
 import { useApp, useLoad } from "../state";
-import { amountText, categoryTree, formatDate, parseAmount } from "../format";
-import { CategorySelect, Confirm, Dialog, Empty, Field, Form, FormError, Money, useAction } from "../ui";
+import { amountText, categoryTree, formatDate, nextPaletteColor, paletteColor, parseAmount } from "../format";
+import { CategoryChip, CategorySelect, Confirm, Dialog, Empty, Field, Form, FormError, Money, useAction, useCategoryStyle } from "../ui";
 
 interface Draft {
   category: Category | null;
@@ -11,18 +11,20 @@ interface Draft {
 }
 
 function CategoryDialog({ draft, onClose }: { draft: Draft; onClose: () => void }) {
-  const { refresh } = useApp();
+  const { categories, refresh } = useApp();
   const { error, setError, busy, run } = useAction();
   const { category } = draft;
   const [name, setName] = useState(category?.name ?? "");
   const [kind, setKind] = useState(draft.kind);
   const [parentId, setParentId] = useState(draft.parentId);
   const [budget, setBudget] = useState(amountText(category?.defaultBudgetCents));
+  const [color, setColor] = useState(category ? (category.color ?? paletteColor(category.id)) : nextPaletteColor(categories));
+  const hasChildren = (category?.childCount ?? 0) > 0;
 
   const save = () => {
     const defaultBudgetCents = budget.trim() ? parseAmount(budget) : null;
     if (budget.trim() && defaultBudgetCents === null) return setError("Enter a valid budget, such as 250.");
-    const input = { name, kind, parentId, defaultBudgetCents };
+    const input = { name, kind, parentId, defaultBudgetCents, color: parentId === null ? color : null };
     run(async () => {
       await (category ? api.updateCategory(category.id, input) : api.createCategory(input));
       refresh();
@@ -47,10 +49,25 @@ function CategoryDialog({ draft, onClose }: { draft: Draft; onClose: () => void 
               <option value="income">Income</option>
             </select>
           </Field>
-          <Field label="Parent">
-            <CategorySelect value={parentId} onChange={setParentId} kind={kind} placeholder="None" exclude={category?.id} />
+          <Field label="Parent" hint={hasChildren ? "It has subcategories, so it stays top-level." : undefined}>
+            <CategorySelect
+              value={parentId}
+              onChange={setParentId}
+              kind={kind}
+              placeholder="None"
+              exclude={category?.id}
+              topLevelOnly
+              disabled={hasChildren}
+            />
           </Field>
         </div>
+        {parentId === null ? (
+          <Field label="Color" hint="Subcategories use a darker shade of it.">
+            <input type="color" className="color-input" value={color} onChange={(event) => setColor(event.target.value)} />
+          </Field>
+        ) : (
+          <p className="hint">Subcategories use a darker shade of their parent's color.</p>
+        )}
         {kind === "expense" && (
           <Field label="Monthly budget" hint="Optional. Individual months can override it on the Budgets page.">
             <input inputMode="decimal" value={budget} onChange={(event) => setBudget(event.target.value)} />
@@ -76,13 +93,14 @@ function CategoryDetail({ category, onEdit, onAddChild }: { category: Category; 
   const [confirming, setConfirming] = useState(false);
   const recent = useLoad(() => api.listTransactions({ categoryId: category.id }), [category.id]);
   const inUse = category.transactionCount + category.childCount + category.recurringCount > 0;
+  const style = useCategoryStyle(category.id);
 
   const setArchived = (archived: boolean) => {
     api.setCategoryArchived(category.id, archived).then(refresh).catch((error) => notify(String(error)));
   };
 
   return (
-    <section className="card">
+    <section className="card category-panel" style={style}>
       <h2>
         {category.name}
         {category.archived && <span className="tag">Archived</span>}
@@ -101,7 +119,7 @@ function CategoryDetail({ category, onEdit, onAddChild }: { category: Category; 
         <button type="button" onClick={onEdit}>
           Edit
         </button>
-        {!category.archived && (
+        {!category.archived && category.parentId === null && (
           <button type="button" onClick={onAddChild}>
             Add subcategory
           </button>
@@ -124,7 +142,8 @@ function CategoryDetail({ category, onEdit, onAddChild }: { category: Category; 
       {recent?.slice(0, 8).map((transaction) => (
         <div className="status-line" key={transaction.id}>
           <span>
-            {transaction.description || transaction.categoryName}
+            {transaction.description || <span className="hint">No description</span>}{" "}
+            <CategoryChip id={transaction.categoryId} name={transaction.categoryName} />
             <br />
             <span className="hint">{formatDate(transaction.date)}</span>
           </span>
@@ -150,6 +169,29 @@ function CategoryDetail({ category, onEdit, onAddChild }: { category: Category; 
   );
 }
 
+function TreeRow(props: { category: Category; depth: number; selected: boolean; onSelect: () => void }) {
+  const { category, depth } = props;
+  const style = useCategoryStyle(category.id);
+  return (
+    <button
+      type="button"
+      className={`tree-row${category.archived ? " archived" : ""}`}
+      aria-pressed={props.selected}
+      style={{ ...style, paddingLeft: 8 + depth * 18 }}
+      onClick={props.onSelect}
+    >
+      <i className="cat-dot" />
+      {category.name}
+      {category.archived && <span className="tag">Archived</span>}
+      {category.defaultBudgetCents !== null && (
+        <span className="num">
+          <Money cents={category.defaultBudgetCents} />
+        </span>
+      )}
+    </button>
+  );
+}
+
 function Tree(props: { title: string; kind: Kind; selected: number | null; onSelect: (id: number) => void }) {
   const { categories } = useApp();
   const entries = categoryTree(categories, props.kind);
@@ -158,22 +200,13 @@ function Tree(props: { title: string; kind: Kind; selected: number | null; onSel
       <h2>{props.title}</h2>
       {entries.length === 0 && <p className="hint">None yet.</p>}
       {entries.map(({ category, depth }) => (
-        <button
+        <TreeRow
           key={category.id}
-          type="button"
-          className={`tree-row${category.archived ? " archived" : ""}`}
-          aria-pressed={props.selected === category.id}
-          style={{ paddingLeft: 8 + depth * 18 }}
-          onClick={() => props.onSelect(category.id)}
-        >
-          {category.name}
-          {category.archived && <span className="tag">Archived</span>}
-          {category.defaultBudgetCents !== null && (
-            <span className="num">
-              <Money cents={category.defaultBudgetCents} />
-            </span>
-          )}
-        </button>
+          category={category}
+          depth={depth}
+          selected={props.selected === category.id}
+          onSelect={() => props.onSelect(category.id)}
+        />
       ))}
     </section>
   );

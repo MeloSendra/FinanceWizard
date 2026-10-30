@@ -1,6 +1,6 @@
 [package]
 name = "financewizard"
-version = "0.1.0"
+version = "0.2.0"
 description = "A local personal finance manager"
 authors = ["Josse Sendra"]
 edition = "2024"

@@ -32,14 +32,16 @@ One-time setup:
 3. Add the private key's contents and its password as the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
 4. Keep both in a password manager. If the key is lost, installed copies can no longer update and need a manual install.
 
-For each release, set the same version in `package.json` and `src-tauri/Cargo.toml`, commit, and push a tag:
+For each release, set the same version in `package.json` and `src-tauri/Cargo.toml`, commit, and merge to `master`. Then tag the merge commit on an up-to-date `master` and push the tag:
 
 ```
-git tag v0.2.1
-git push origin v0.2.1
+git checkout master
+git pull
+git tag v0.3.1
+git push origin v0.3.1
 ```
 
-The release workflow runs the tests, then builds, signs, and publishes the GitHub Release.
+Only a tag starts a release, so pushing commits does not. The release workflow stops if the tag does not match both versions. Otherwise it runs the tests, then builds, signs, and publishes the GitHub Release.
 
 ## Your data
 

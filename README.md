@@ -81,7 +81,7 @@ Categories have two levels: parents and subcategories. A parent has a color of y
 
 ## Appearance
 
-**Settings > Appearance** offers System, Light, Dim, Dark, and Custom. Custom takes a background and an accent, and picks readable text colors for you. The choice is stored for this Windows account rather than in the database, so backups do not include it.
+**Settings > Appearance** offers System, Light, Dim, Dark, and Custom. Custom takes a background and an accent, and picks readable text colors for you. The Money remaining card can also change style: Plain, Treasure, Gold pieces, or Comparison, which counts it in something you choose, such as coffees. Treasure shows a pile based on the share of this month's income you have left, and coins fall onto it when the app opens and a scheduled payment has gone out. The falling coins follow the Windows animation setting unless you choose otherwise. These choices are stored for this Windows account rather than in the database, so backups do not include them.
 
 ## Deleting data
 

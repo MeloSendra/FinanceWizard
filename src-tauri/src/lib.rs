@@ -4,6 +4,7 @@ mod commands;
 mod dates;
 mod db;
 mod error;
+mod purge;
 mod recurring;
 mod reports;
 mod transactions;
@@ -50,6 +51,8 @@ pub fn run() {
             commands::add_recurring_value,
             commands::update_recurring_value,
             commands::delete_recurring_value,
+            commands::missed_payments,
+            commands::add_missed_payments,
             commands::month_report,
             commands::set_budget,
             commands::clear_budget,
@@ -59,6 +62,9 @@ pub fn run() {
             commands::choose_backup,
             commands::restore_database,
             commands::export_transactions,
+            commands::count_transactions,
+            commands::purge_transactions,
+            commands::reset_all_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running FinanceWizard");

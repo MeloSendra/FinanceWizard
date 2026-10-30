@@ -5,6 +5,7 @@ use chrono::{Days, NaiveDate};
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 macro_rules! text_enum {
     ($name:ident { $($variant:ident => $text:literal),+ $(,)? }) => {
@@ -101,6 +102,13 @@ pub struct UpcomingPayment {
     pub date: String,
     pub amount_cents: i64,
     pub category_id: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissedPayment {
+    pub date: String,
+    pub amount_cents: i64,
 }
 
 const SELECT: &str = "
@@ -245,6 +253,14 @@ pub fn upcoming(conn: &Connection, today: NaiveDate, first: NaiveDate, last: Nai
     Ok(payments)
 }
 
+fn insert_payment(conn: &Connection, item: &RecurringItem, date: NaiveDate) -> Result<usize> {
+    Ok(conn.execute(
+        "INSERT OR IGNORE INTO transactions (date, amount_cents, description, category_id, recurring_item_id, scheduled_date)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?1)",
+        params![date.to_string(), value_at(conn, item.id, date)?, item.name, item.category_id, item.id],
+    )?)
+}
+
 /// Creates a transaction for every assigned date up to today, then moves the
 /// generated-through date forward so deleted payments are not created again.
 /// Returns how many transactions were created.
@@ -257,16 +273,60 @@ pub fn generate_due(conn: &mut Connection, today: NaiveDate) -> Result<usize> {
         }
         let from = parse_date(&item.generated_through)?;
         for date in pending_dates(&item, from, today)? {
-            created += tx.execute(
-                "INSERT OR IGNORE INTO transactions (date, amount_cents, description, category_id, recurring_item_id, scheduled_date)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?1)",
-                params![date.to_string(), value_at(&tx, item.id, date)?, item.name, item.category_id, item.id],
-            )?;
+            created += insert_payment(&tx, &item, date)?;
         }
         tx.execute(
             "UPDATE recurring_items SET generated_through = MAX(generated_through, ?1) WHERE id = ?2",
             params![today.to_string(), item.id],
         )?;
+    }
+    complete_finished(&tx, today)?;
+    tx.commit()?;
+    Ok(created)
+}
+
+/// Assigned dates that generation has passed without a payment on record, such
+/// as those before an item was entered. Installments entered as already paid
+/// cover the earliest dates, and a payment linked by hand counts on its own date.
+pub fn missed_payments(conn: &Connection, id: i64, today: NaiveDate) -> Result<Vec<MissedPayment>> {
+    let item = get(conn, id, today)?;
+    let start = parse_date(&item.start_date)?;
+    let through = parse_date(&item.generated_through)?;
+    let mut statement = conn.prepare(
+        "SELECT date FROM transactions WHERE recurring_item_id = ?1
+         UNION
+         SELECT scheduled_date FROM transactions WHERE recurring_item_id = ?1 AND scheduled_date IS NOT NULL",
+    )?;
+    let recorded = statement.query_map([id], |row| row.get(0))?.collect::<rusqlite::Result<HashSet<String>>>()?;
+    let covered = match item.item_type {
+        ItemType::Financing => item.opening_paid_installments as usize,
+        ItemType::Subscription => 0,
+    };
+    let mut dates: Vec<NaiveDate> = occurrences(&item, start - Days::new(1), through)?
+        .into_iter()
+        .skip(covered)
+        .filter(|date| !recorded.contains(&date.to_string()))
+        .collect();
+    if let Some(remaining) = remaining_installments(&item) {
+        dates.truncate(remaining);
+    }
+    dates
+        .into_iter()
+        .map(|date| Ok(MissedPayment { date: date.to_string(), amount_cents: value_at(conn, id, date)? }))
+        .collect()
+}
+
+/// Records the chosen missed payments. Returns how many transactions were created.
+pub fn add_missed_payments(conn: &mut Connection, id: i64, dates: &[String], today: NaiveDate) -> Result<usize> {
+    let tx = conn.transaction()?;
+    let item = get(&tx, id, today)?;
+    let missed = missed_payments(&tx, id, today)?;
+    let mut created = 0;
+    for date in dates {
+        if !missed.iter().any(|payment| payment.date == *date) {
+            return invalid("That payment is no longer missing.");
+        }
+        created += insert_payment(&tx, &item, parse_date(date)?)?;
     }
     complete_finished(&tx, today)?;
     tx.commit()?;
@@ -480,7 +540,7 @@ mod tests {
     }
 
     fn expense(conn: &Connection) -> i64 {
-        let input = CategoryInput { name: "Bills".into(), kind: Kind::Expense, parent_id: None, default_budget_cents: None };
+        let input = CategoryInput { name: "Bills".into(), kind: Kind::Expense, parent_id: None, default_budget_cents: None, color: None };
         categories::create(conn, &input).unwrap().id
     }
 
@@ -563,6 +623,95 @@ mod tests {
         create(&mut conn, &financing(category, "2024-01-01", 48, 20), 200_00, date("2026-06-10")).unwrap();
         assert_eq!(generate_due(&mut conn, date("2026-06-10")).unwrap(), 0);
         assert_eq!(generate_due(&mut conn, date("2026-07-02")).unwrap(), 1);
+    }
+
+    /// A financing started on 9 September and entered on 30 October.
+    fn entered_late(conn: &mut Connection, opening: i64) -> RecurringItem {
+        let category = expense(conn);
+        let input = RecurringInput { schedule_day: Some(9), ..financing(category, "2026-09-09", 12, opening) };
+        let item = create(conn, &input, 200_00, date("2026-10-30")).unwrap();
+        generate_due(conn, date("2026-10-30")).unwrap();
+        item
+    }
+
+    fn missed(conn: &Connection, id: i64) -> Vec<String> {
+        missed_payments(conn, id, date("2026-10-30")).unwrap().into_iter().map(|p| p.date).collect()
+    }
+
+    #[test]
+    fn dates_before_an_item_was_entered_are_listed_as_missed() {
+        let mut conn = test_connection();
+        let item = entered_late(&mut conn, 0);
+        assert!(payments(&conn).is_empty());
+        assert_eq!(missed(&conn, item.id), ["2026-09-09", "2026-10-09"]);
+    }
+
+    #[test]
+    fn installments_already_paid_cover_the_earliest_missed_dates() {
+        let mut conn = test_connection();
+        let item = entered_late(&mut conn, 1);
+        assert_eq!(missed(&conn, item.id), ["2026-10-09"]);
+    }
+
+    #[test]
+    fn a_payment_linked_by_hand_is_not_missed() {
+        let mut conn = test_connection();
+        let item = entered_late(&mut conn, 0);
+        transactions::create(&conn, &TransactionInput {
+            date: "2026-09-09".into(),
+            amount_cents: 200_00,
+            description: String::new(),
+            category_id: item.category_id,
+            recurring_item_id: Some(item.id),
+        }).unwrap();
+        assert_eq!(missed(&conn, item.id), ["2026-10-09"]);
+    }
+
+    #[test]
+    fn adding_missed_payments_records_them_once_and_counts_toward_progress() {
+        let mut conn = test_connection();
+        let item = entered_late(&mut conn, 0);
+        let chosen = ["2026-10-09".to_string()];
+        assert_eq!(add_missed_payments(&mut conn, item.id, &chosen, date("2026-10-30")).unwrap(), 1);
+        assert_eq!(payments(&conn), vec![("2026-10-09".to_string(), 200_00)]);
+        assert_eq!(get(&conn, item.id, date("2026-10-30")).unwrap().paid_installments, 1);
+        assert_eq!(missed(&conn, item.id), ["2026-09-09"]);
+
+        assert!(add_missed_payments(&mut conn, item.id, &chosen, date("2026-10-30")).is_err());
+        assert_eq!(payments(&conn).len(), 1);
+        assert_eq!(generate_due(&mut conn, date("2026-10-30")).unwrap(), 0);
+    }
+
+    #[test]
+    fn missed_payments_use_the_value_on_their_date() {
+        let mut conn = test_connection();
+        let item = entered_late(&mut conn, 0);
+        add_value(&conn, item.id, "2026-10-01", 250_00).unwrap();
+        let amounts: Vec<_> = missed_payments(&conn, item.id, date("2026-10-30")).unwrap().into_iter().map(|p| p.amount_cents).collect();
+        assert_eq!(amounts, [200_00, 250_00]);
+    }
+
+    #[test]
+    fn missed_payments_stop_at_the_installment_count_and_complete_the_item() {
+        let mut conn = test_connection();
+        let category = expense(&conn);
+        let input = RecurringInput { schedule_day: Some(9), ..financing(category, "2026-01-09", 2, 0) };
+        let item = create(&mut conn, &input, 200_00, date("2026-10-30")).unwrap();
+        generate_due(&mut conn, date("2026-10-30")).unwrap();
+        let dates = missed(&conn, item.id);
+        assert_eq!(dates, ["2026-01-09", "2026-02-09"]);
+        add_missed_payments(&mut conn, item.id, &dates, date("2026-10-30")).unwrap();
+        let item = get(&conn, item.id, date("2026-10-30")).unwrap();
+        assert_eq!(item.status, Status::Completed);
+        assert!(missed(&conn, item.id).is_empty());
+    }
+
+    #[test]
+    fn items_without_a_schedule_have_no_missed_payments() {
+        let mut conn = test_connection();
+        let category = expense(&conn);
+        let item = create(&mut conn, &subscription(category, "2026-01-01", None), 10_00, date("2026-10-30")).unwrap();
+        assert!(missed(&conn, item.id).is_empty());
     }
 
     #[test]

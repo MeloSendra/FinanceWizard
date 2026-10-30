@@ -179,7 +179,7 @@ mod tests {
     const PASSPHRASE: &str = "correct horse battery";
 
     fn seed(conn: &Connection, name: &str, description: &str) {
-        let input = CategoryInput { name: name.into(), kind: Kind::Expense, parent_id: None, default_budget_cents: None };
+        let input = CategoryInput { name: name.into(), kind: Kind::Expense, parent_id: None, default_budget_cents: None, color: None };
         let category = categories::create(conn, &input).unwrap();
         let input = TransactionInput {
             date: "2026-01-05".into(),

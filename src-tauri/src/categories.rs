@@ -38,6 +38,8 @@ pub struct Category {
     pub parent_id: Option<i64>,
     pub default_budget_cents: Option<i64>,
     pub archived: bool,
+    /// Only top-level categories have one; subcategories derive theirs from it.
+    pub color: Option<String>,
     pub transaction_count: i64,
     pub child_count: i64,
     pub recurring_count: i64,
@@ -50,13 +52,15 @@ pub struct CategoryInput {
     pub kind: Kind,
     pub parent_id: Option<i64>,
     pub default_budget_cents: Option<i64>,
+    pub color: Option<String>,
 }
 
 const SELECT: &str = "
     SELECT c.id, c.name, c.kind, c.parent_id, c.default_budget_cents, c.archived,
            (SELECT COUNT(*) FROM transactions t WHERE t.category_id = c.id),
            (SELECT COUNT(*) FROM categories s WHERE s.parent_id = c.id),
-           (SELECT COUNT(*) FROM recurring_items r WHERE r.category_id = c.id)
+           (SELECT COUNT(*) FROM recurring_items r WHERE r.category_id = c.id),
+           c.color
     FROM categories c";
 
 fn from_row(row: &Row) -> rusqlite::Result<Category> {
@@ -67,6 +71,7 @@ fn from_row(row: &Row) -> rusqlite::Result<Category> {
         parent_id: row.get(3)?,
         default_budget_cents: row.get(4)?,
         archived: row.get(5)?,
+        color: row.get(9)?,
         transaction_count: row.get(6)?,
         child_count: row.get(7)?,
         recurring_count: row.get(8)?,
@@ -107,6 +112,11 @@ fn validate(conn: &Connection, id: Option<i64>, input: &CategoryInput) -> Result
     if input.default_budget_cents.is_some_and(|cents| cents < 0) {
         return invalid("A budget cannot be negative.");
     }
+    if let Some(color) = &input.color
+        && !(color.len() == 7 && color.starts_with('#') && color[1..].chars().all(|c| c.is_ascii_hexdigit()))
+    {
+        return invalid("Choose a color in the form #rrggbb.");
+    }
     if let Some(parent_id) = input.parent_id {
         let parent = get(conn, parent_id)?;
         if parent.kind != input.kind {
@@ -119,6 +129,14 @@ fn validate(conn: &Connection, id: Option<i64>, input: &CategoryInput) -> Result
             && lineage(conn, parent_id)?.contains(&id)
         {
             return invalid("A category cannot be moved inside itself.");
+        }
+        if parent.parent_id.is_some() {
+            return invalid("Subcategories cannot have subcategories of their own.");
+        }
+        if let Some(id) = id
+            && get(conn, id)?.child_count > 0
+        {
+            return invalid("A category with subcategories cannot become a subcategory.");
         }
     }
     let duplicate: Option<i64> = conn
@@ -135,11 +153,16 @@ fn validate(conn: &Connection, id: Option<i64>, input: &CategoryInput) -> Result
     Ok(name)
 }
 
+/// Subcategories take their color from their parent, so none is stored.
+fn stored_color(input: &CategoryInput) -> Option<&str> {
+    input.color.as_deref().filter(|_| input.parent_id.is_none())
+}
+
 pub fn create(conn: &Connection, input: &CategoryInput) -> Result<Category> {
     let name = validate(conn, None, input)?;
     conn.execute(
-        "INSERT INTO categories (name, kind, parent_id, default_budget_cents) VALUES (?1, ?2, ?3, ?4)",
-        params![name, input.kind, input.parent_id, input.default_budget_cents],
+        "INSERT INTO categories (name, kind, parent_id, default_budget_cents, color) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![name, input.kind, input.parent_id, input.default_budget_cents, stored_color(input)],
     )?;
     get(conn, conn.last_insert_rowid())
 }
@@ -153,8 +176,8 @@ pub fn update(conn: &Connection, id: i64, input: &CategoryInput) -> Result<Categ
         return invalid("The kind of a category in use cannot be changed.");
     }
     conn.execute(
-        "UPDATE categories SET name = ?1, kind = ?2, parent_id = ?3, default_budget_cents = ?4 WHERE id = ?5",
-        params![name, input.kind, input.parent_id, input.default_budget_cents, id],
+        "UPDATE categories SET name = ?1, kind = ?2, parent_id = ?3, default_budget_cents = ?4, color = ?5 WHERE id = ?6",
+        params![name, input.kind, input.parent_id, input.default_budget_cents, stored_color(input), id],
     )?;
     get(conn, id)
 }
@@ -201,17 +224,46 @@ mod tests {
     use crate::db::test_connection;
 
     fn input(name: &str, kind: Kind, parent_id: Option<i64>) -> CategoryInput {
-        CategoryInput { name: name.into(), kind, parent_id, default_budget_cents: None }
+        CategoryInput { name: name.into(), kind, parent_id, default_budget_cents: None, color: None }
     }
 
     #[test]
     fn rejects_cycles() {
         let conn = test_connection();
         let top = create(&conn, &input("Home", Kind::Expense, None)).unwrap();
-        let mid = create(&conn, &input("Utilities", Kind::Expense, Some(top.id))).unwrap();
-        let low = create(&conn, &input("Power", Kind::Expense, Some(mid.id))).unwrap();
-        assert!(update(&conn, top.id, &input("Home", Kind::Expense, Some(low.id))).is_err());
+        let child = create(&conn, &input("Utilities", Kind::Expense, Some(top.id))).unwrap();
+        assert!(update(&conn, top.id, &input("Home", Kind::Expense, Some(child.id))).is_err());
         assert!(update(&conn, top.id, &input("Home", Kind::Expense, Some(top.id))).is_err());
+    }
+
+    #[test]
+    fn categories_stop_at_two_levels() {
+        let conn = test_connection();
+        let top = create(&conn, &input("Home", Kind::Expense, None)).unwrap();
+        let child = create(&conn, &input("Utilities", Kind::Expense, Some(top.id))).unwrap();
+        assert!(create(&conn, &input("Power", Kind::Expense, Some(child.id))).is_err());
+
+        let other = create(&conn, &input("Car", Kind::Expense, None)).unwrap();
+        assert!(update(&conn, top.id, &input("Home", Kind::Expense, Some(other.id))).is_err());
+        update(&conn, child.id, &input("Utilities", Kind::Expense, Some(other.id))).unwrap();
+        update(&conn, child.id, &input("Utilities", Kind::Expense, None)).unwrap();
+    }
+
+    #[test]
+    fn colors_must_be_hex_and_only_stay_on_parents() {
+        let conn = test_connection();
+        let colored = |name: &str, parent_id, color: &str| CategoryInput { color: Some(color.into()), ..input(name, Kind::Expense, parent_id) };
+        for bad in ["red", "#12345", "#12345g", "123456", "#\u{e9}\u{e9}\u{e9}"] {
+            assert!(create(&conn, &colored("Food", None, bad)).is_err(), "{bad}");
+        }
+        let parent = create(&conn, &colored("Home", None, "#2A78d6")).unwrap();
+        assert_eq!(parent.color.as_deref(), Some("#2A78d6"));
+
+        let child = create(&conn, &colored("Rent", Some(parent.id), "#eb6834")).unwrap();
+        assert_eq!(child.color, None);
+        let moved_under = create(&conn, &colored("Car", None, "#1baf7a")).unwrap();
+        let updated = update(&conn, moved_under.id, &colored("Car", Some(parent.id), "#1baf7a")).unwrap();
+        assert_eq!(updated.color, None);
     }
 
     #[test]

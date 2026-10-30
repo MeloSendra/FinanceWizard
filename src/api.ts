@@ -138,7 +138,20 @@ export interface Settings {
   lastBackupAt: string | null;
 }
 
+export type VaultStatus = "setup" | "locked" | "recovery" | "unlocked";
+
+export interface BackupChoice {
+  path: string;
+  needsPassphrase: boolean;
+}
+
 export const api = {
+  vaultStatus: () => invoke<VaultStatus>("vault_status"),
+  createPin: (pin: string) => invoke<string>("create_pin", { pin }),
+  unlock: (pin: string) => invoke<void>("unlock", { pin }),
+  recover: (code: string, pin: string) => invoke<void>("recover", { code, pin }),
+  changePin: (current: string, newPin: string) => invoke<void>("change_pin", { current, new: newPin }),
+
   listCategories: () => invoke<Category[]>("list_categories"),
   createCategory: (input: CategoryInput) => invoke<Category>("create_category", { input }),
   updateCategory: (id: number, input: CategoryInput) => invoke<Category>("update_category", { id, input }),
@@ -170,7 +183,9 @@ export const api = {
 
   getSettings: () => invoke<Settings>("get_settings"),
   setCurrency: (currency: string) => invoke<void>("set_currency", { currency }),
-  backupDatabase: () => invoke<boolean>("backup_database"),
-  restoreDatabase: () => invoke<boolean>("restore_database"),
+  backupDatabase: (passphrase: string) => invoke<boolean>("backup_database", { passphrase }),
+  chooseBackup: () => invoke<BackupChoice | null>("choose_backup"),
+  restoreDatabase: (path: string, passphrase: string | null) =>
+    invoke<void>("restore_database", { path, passphrase }),
   exportTransactions: () => invoke<boolean>("export_transactions"),
 };

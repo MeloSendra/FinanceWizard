@@ -715,6 +715,35 @@ tfoot td {
   font-variant-numeric: tabular-nums;
 }
 
+.unlock {
+  display: flex;
+  min-height: 100%;
+  padding: 16px;
+}
+
+.unlock .card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(420px, 100%);
+  margin: auto;
+}
+
+.unlock .brand {
+  display: block;
+  padding: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.recovery-key {
+  padding: 10px 12px;
+  border-radius: 7px;
+  background: var(--wash);
+  font: 14px/1.6 Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
 .toast {
   position: fixed;
   right: 20px;

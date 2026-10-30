@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, type Category, type Settings as AppSettings } from "./api";
+import { api, type Category, type Settings as AppSettings, type VaultStatus } from "./api";
 import { AppContext } from "./state";
 import { currentMonth, formatDate } from "./format";
 import Budgets from "./pages/Budgets";
@@ -8,6 +8,7 @@ import Dashboard from "./pages/Dashboard";
 import Recurring from "./pages/Recurring";
 import Settings from "./pages/Settings";
 import Transactions from "./pages/Transactions";
+import Unlock from "./pages/Unlock";
 
 const PAGES = {
   Dashboard,
@@ -20,7 +21,7 @@ const PAGES = {
 
 type PageName = keyof typeof PAGES;
 
-export default function App() {
+function Shell() {
   const [page, setPage] = useState<PageName>("Dashboard");
   const [categories, setCategories] = useState<Category[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -94,4 +95,21 @@ export default function App() {
       )}
     </AppContext.Provider>
   );
+}
+
+export default function App() {
+  const [status, setStatus] = useState<VaultStatus | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .vaultStatus()
+      .then(setStatus)
+      .catch((error) => setFailure(String(error)));
+  }, []);
+
+  if (failure) return <p className="form-error">{failure}</p>;
+  if (!status) return null;
+  if (status === "unlocked") return <Shell />;
+  return <Unlock status={status} onUnlocked={() => setStatus("unlocked")} />;
 }

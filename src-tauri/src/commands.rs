@@ -3,7 +3,7 @@ use crate::categories::{self, Category, CategoryInput, Kind};
 use crate::error::{AppError, Result};
 use crate::purge;
 use crate::recurring::{self, MissedPayment, RecurringInput, RecurringItem, ValueRecord};
-use crate::reports::{self, MonthReport};
+use crate::reports::{self, MonthReport, SavingsReport};
 use crate::transactions::{self, Suggestion, Transaction, TransactionFilter, TransactionInput};
 use crate::vault::{self, DATABASE_FILE, Key, Status};
 use chrono::{Local, NaiveDate};
@@ -235,6 +235,16 @@ pub fn month_report(db: State<Database>, month: String) -> Result<MonthReport> {
 }
 
 #[tauri::command]
+pub fn savings_report(db: State<Database>) -> Result<SavingsReport> {
+    reports::savings_report(&*db.lock()?, today())
+}
+
+#[tauri::command]
+pub fn set_savings(db: State<Database>, opening_cents: i64, start_month: Option<String>) -> Result<()> {
+    backup::set_savings(&*db.lock()?, opening_cents, start_month.as_deref())
+}
+
+#[tauri::command]
 pub fn set_budget(db: State<Database>, month: String, category_id: i64, amount_cents: i64) -> Result<()> {
     reports::set_budget(&*db.lock()?, &month, category_id, amount_cents)
 }
@@ -350,7 +360,7 @@ pub fn purge_transactions(db: State<Database>, from: String, to: String) -> Resu
     let mut unlocked = db.lock()?;
     let session = unlocked.session();
     crate::db::export_to(&session.conn, &safety, &session.key.sql())?;
-    purge::delete_transactions(&session.conn, &from, &to)
+    purge::delete_transactions(&session.conn, &from, &to, today())
 }
 
 #[tauri::command(async)]

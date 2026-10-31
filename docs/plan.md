@@ -60,7 +60,8 @@ Use a small, stable navigation structure:
 3. Categories: tree view, category detail, optional monthly budget, and usage/history view.
 4. Recurring: financing and subscriptions in one area, with type-specific fields and progress indicators. Financing shows installment progress as one continuous bar regardless of term length, with unlabelled marks at every 25%: a line in the unfilled track and/or an indent on the filled bar. Hovering the bar shows the numbers (8 of 24), and they must also be reachable by keyboard focus. The amount sits beside it as plain text (1,600 / 4,800).
 5. Budgets: planned versus spent-so-far and projected by month and category, reusing category budgets where no explicit budget exists.
-6. Settings: backup, restore, and export actions.
+6. Savings: total saved, the running month, and history by month.
+7. Settings: backup, restore, and export actions.
 
 The first UI pass should prioritize hierarchy, readable tables/cards, keyboard-accessible forms, empty states, validation messages, and confirmation for destructive actions. Graphs should be derived from query results rather than stored separately.
 
@@ -83,6 +84,9 @@ The first UI pass should prioritize hierarchy, readable tables/cards, keyboard-a
 - “Monthly expense” means transactions whose date falls in the selected calendar month; recurring projections should be displayed separately from actuals.
 - Monthly views show two figures: spent so far, from transactions, and projected end of month, which is spent so far plus scheduled payments still due that month. Both are calculated per category as well as in total, and neither is stored.
 - Upcoming payments use the value that applies on their scheduled date and the category set on their schedule. Past months show actuals only, and future months show only the upcoming payments.
+- A recurring item's kind comes from its category, so recurring income such as a salary is a non-financing item with an income category. It posts on its scheduled date like any other item. Expected income is kept apart from spending and budgets, and money remaining is projected income minus projected spending.
+- A completed item reopens when an edit, or a deleted or unlinked payment, undoes what finished it. Items the user completed by hand with payments left stay completed. Dates passed in between appear under Past payments rather than posting automatically.
+- Savings are calculated, never stored: an opening balance plus each finished month's income minus its expenses, from a chosen start month or the first transaction. Overspent months subtract, the current month does not count until it ends, and savings are never part of money remaining.
 - Budget alerts use the projected figure, so a category is flagged as soon as its scheduled payments will take it over budget.
 - Recurring items without a schedule have no due date, so they are not part of the projection.
 - Backups use SQLite's own backup mechanism rather than copying the live file, and produce a single restorable file.

@@ -1,3 +1,4 @@
+use crate::backup;
 use crate::categories::{self, Category, Kind};
 use crate::dates::{month_bounds, month_index, month_key};
 use crate::error::{Result, invalid};
@@ -45,6 +46,23 @@ pub struct MonthReport {
     pub upcoming: Vec<UpcomingPayment>,
     pub upcoming_income: Vec<UpcomingPayment>,
     pub trend: Vec<TrendPoint>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavingsMonth {
+    pub month: String,
+    pub income_cents: i64,
+    pub expense_cents: i64,
+    pub saved_cents: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavingsReport {
+    pub total_cents: i64,
+    pub current_month_cents: i64,
+    pub months: Vec<SavingsMonth>,
 }
 
 fn month_totals(conn: &Connection, month: &str) -> Result<HashMap<i64, i64>> {
@@ -147,22 +165,28 @@ fn budget_rows(conn: &Connection, month: &str, upcoming: &[UpcomingPayment]) -> 
     Ok((rows, total))
 }
 
-fn trend(conn: &Connection, end_month: i32) -> Result<Vec<TrendPoint>> {
-    let first = end_month - TREND_MONTHS + 1;
+/// Income (true) and expense (false) totals by month, for months in the range.
+fn monthly_totals(conn: &Connection, first: i32, last: i32) -> Result<HashMap<(String, bool), i64>> {
     let mut statement = conn.prepare(
         "SELECT substr(t.date, 1, 7), c.kind, SUM(t.amount_cents)
          FROM transactions t JOIN categories c ON c.id = t.category_id
          WHERE substr(t.date, 1, 7) BETWEEN ?1 AND ?2
          GROUP BY 1, 2",
     )?;
-    let rows = statement.query_map(params![month_key(first), month_key(end_month)], |row| {
+    let rows = statement.query_map(params![month_key(first), month_key(last)], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, Kind>(1)?, row.get::<_, i64>(2)?))
     })?;
-    let mut totals: HashMap<(String, bool), i64> = HashMap::new();
+    let mut totals = HashMap::new();
     for row in rows {
         let (month, kind, cents) = row?;
         totals.insert((month, kind == Kind::Income), cents);
     }
+    Ok(totals)
+}
+
+fn trend(conn: &Connection, end_month: i32) -> Result<Vec<TrendPoint>> {
+    let first = end_month - TREND_MONTHS + 1;
+    let totals = monthly_totals(conn, first, end_month)?;
     let points = (first..=end_month).map(|index| {
         let month = month_key(index);
         TrendPoint {
@@ -210,6 +234,32 @@ pub fn month_report(conn: &Connection, month: &str, today: NaiveDate) -> Result<
         upcoming,
         upcoming_income,
         trend: trend(conn, month_index(first))?,
+    })
+}
+
+/// Savings are worked out from transactions and never stored. A month counts
+/// once it has ended, and an overspent month takes from the total.
+pub fn savings_report(conn: &Connection, today: NaiveDate) -> Result<SavingsReport> {
+    let settings = backup::settings(conn)?;
+    let current = month_index(today);
+    let first_recorded: Option<String> =
+        conn.query_row("SELECT MIN(substr(date, 1, 7)) FROM transactions", [], |row| row.get(0))?;
+    let first = match settings.savings_start_month.or(first_recorded) {
+        Some(month) => month_index(month_bounds(&month)?.0),
+        None => current,
+    };
+    let totals = monthly_totals(conn, first.min(current), current)?;
+    let saved = |index: i32| {
+        let month = month_key(index);
+        let income_cents = totals.get(&(month.clone(), true)).copied().unwrap_or(0);
+        let expense_cents = totals.get(&(month.clone(), false)).copied().unwrap_or(0);
+        SavingsMonth { month, income_cents, expense_cents, saved_cents: income_cents - expense_cents }
+    };
+    let months: Vec<SavingsMonth> = (first..current).map(saved).collect();
+    Ok(SavingsReport {
+        total_cents: settings.savings_opening_cents + months.iter().map(|month| month.saved_cents).sum::<i64>(),
+        current_month_cents: saved(current).saved_cents,
+        months,
     })
 }
 
@@ -314,6 +364,63 @@ mod tests {
         assert_eq!((past.spent_cents, past.upcoming_cents), (100_00, 0));
         let future = month_report(&conn, "2026-05", date("2026-03-10")).unwrap();
         assert_eq!((future.spent_cents, future.upcoming_cents), (0, 150_00));
+    }
+
+    fn savings_data(conn: &Connection) {
+        let food = category(conn, "Food", Kind::Expense, None, None);
+        let salary = category(conn, "Salary", Kind::Income, None, None);
+        spend(conn, "2026-01-05", 1000_00, salary);
+        spend(conn, "2026-01-06", 400_00, food);
+        // February has nothing, and March overspends.
+        spend(conn, "2026-03-05", 1000_00, salary);
+        spend(conn, "2026-03-06", 1100_00, food);
+        // April is still running.
+        spend(conn, "2026-04-05", 1000_00, salary);
+    }
+
+    #[test]
+    fn savings_add_up_finished_months_and_overspending_subtracts() {
+        let conn = test_connection();
+        savings_data(&conn);
+        let report = savings_report(&conn, date("2026-04-10")).unwrap();
+        let saved: Vec<_> = report.months.iter().map(|m| (m.month.as_str(), m.saved_cents)).collect();
+        assert_eq!(saved, [("2026-01", 600_00), ("2026-02", 0), ("2026-03", -100_00)]);
+        assert_eq!(report.total_cents, 500_00);
+        assert_eq!(report.current_month_cents, 1000_00);
+    }
+
+    #[test]
+    fn savings_start_from_the_opening_balance_and_chosen_month() {
+        let conn = test_connection();
+        savings_data(&conn);
+        backup::set_savings(&conn, 2000_00, Some("2026-02")).unwrap();
+        let report = savings_report(&conn, date("2026-04-10")).unwrap();
+        assert_eq!(report.months.len(), 2);
+        assert_eq!(report.total_cents, 1900_00);
+
+        backup::set_savings(&conn, 2000_00, None).unwrap();
+        assert_eq!(savings_report(&conn, date("2026-04-10")).unwrap().months.len(), 3);
+    }
+
+    #[test]
+    fn savings_ignore_scheduled_income_and_work_with_no_data() {
+        let mut conn = test_connection();
+        let empty = savings_report(&conn, date("2026-04-10")).unwrap();
+        assert_eq!((empty.total_cents, empty.current_month_cents, empty.months.len()), (0, 0, 0));
+
+        let salary = category(&conn, "Salary", Kind::Income, None, None);
+        schedule(&mut conn, "Pay", salary, 25, 2000_00, "2026-04-01");
+        assert_eq!(savings_report(&conn, date("2026-04-10")).unwrap().current_month_cents, 0);
+    }
+
+    #[test]
+    fn a_start_month_in_the_future_counts_nothing() {
+        let conn = test_connection();
+        savings_data(&conn);
+        backup::set_savings(&conn, 50_00, Some("2027-01")).unwrap();
+        let report = savings_report(&conn, date("2026-04-10")).unwrap();
+        assert!(report.months.is_empty());
+        assert_eq!(report.total_cents, 50_00);
     }
 
     #[test]

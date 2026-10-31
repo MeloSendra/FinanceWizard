@@ -150,9 +150,24 @@ export interface MonthReport {
   trend: TrendPoint[];
 }
 
+export interface SavingsMonth {
+  month: string;
+  incomeCents: number;
+  expenseCents: number;
+  savedCents: number;
+}
+
+export interface SavingsReport {
+  totalCents: number;
+  currentMonthCents: number;
+  months: SavingsMonth[];
+}
+
 export interface Settings {
   currency: string;
   lastBackupAt: string | null;
+  savingsOpeningCents: number;
+  savingsStartMonth: string | null;
 }
 
 export type VaultStatus = "setup" | "locked" | "recovery" | "unlocked";
@@ -202,6 +217,9 @@ export const api = {
   setBudget: (month: string, categoryId: number, amountCents: number) =>
     invoke<void>("set_budget", { month, categoryId, amountCents }),
   clearBudget: (month: string, categoryId: number) => invoke<void>("clear_budget", { month, categoryId }),
+
+  savingsReport: () => invoke<SavingsReport>("savings_report"),
+  setSavings: (openingCents: number, startMonth: string | null) => invoke<void>("set_savings", { openingCents, startMonth }),
 
   getSettings: () => invoke<Settings>("get_settings"),
   setCurrency: (currency: string) => invoke<void>("set_currency", { currency }),

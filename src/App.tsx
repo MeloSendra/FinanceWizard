@@ -7,6 +7,7 @@ import Budgets from "./pages/Budgets";
 import Categories from "./pages/Categories";
 import Dashboard from "./pages/Dashboard";
 import Recurring from "./pages/Recurring";
+import Savings from "./pages/Savings";
 import Settings from "./pages/Settings";
 import Transactions from "./pages/Transactions";
 import Unlock from "./pages/Unlock";
@@ -17,6 +18,7 @@ const PAGES = {
   Categories,
   Recurring,
   Budgets,
+  Savings,
   Settings,
 };
 

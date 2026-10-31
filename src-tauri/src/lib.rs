@@ -34,6 +34,8 @@ pub fn run() {
             commands::recover,
             commands::change_pin,
             commands::list_categories,
+            commands::savings_report,
+            commands::set_savings,
             commands::create_starter_categories,
             commands::transaction_suggestions,
             commands::create_category,

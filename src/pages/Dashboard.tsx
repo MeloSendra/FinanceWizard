@@ -68,6 +68,7 @@ function MoneyRemaining({ report }: { report: MonthReport }) {
 export default function Dashboard() {
   const { month, categories, setPage } = useApp();
   const report = useLoad(() => api.monthReport(month), [month]);
+  const savings = useLoad(() => api.savingsReport(), []);
   if (!report) return null;
 
   const alerts = report.rows.filter((row) => row.budgetCents !== null && row.projectedCents > row.budgetCents);
@@ -112,6 +113,14 @@ export default function Dashboard() {
           <div className="stat-label">Budget</div>
           <div className="stat-value">{report.budgetCents === null ? "None set" : <Money cents={report.budgetCents} />}</div>
         </div>
+        {savings && (
+          <button type="button" className="card savings-card" onClick={() => setPage("Savings")}>
+            <div className="stat-label">Total savings</div>
+            <div className={`stat-value${savings.totalCents < 0 ? " negative" : ""}`}>
+              <Money cents={savings.totalCents} />
+            </div>
+          </button>
+        )}
       </section>
 
       <section className="card">

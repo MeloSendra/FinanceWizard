@@ -487,8 +487,21 @@ tfoot td {
 
 .hero-row {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) repeat(4, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 2fr) repeat(3, minmax(0, 1fr));
   gap: 12px;
+}
+
+.hero-row > :first-child {
+  grid-row: span 2;
+}
+
+.savings-card {
+  grid-column: span 2;
+  text-align: left;
+}
+
+.summary.savings-summary {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
 }
 
 .summary {
@@ -1141,11 +1154,12 @@ button.donut-row .donut-name::after {
 
 @media (max-width: 1300px) {
   .hero-row {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .hero-row > :first-child {
     grid-column: 1 / -1;
+    grid-row: auto;
   }
 }
 

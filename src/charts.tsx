@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { BudgetRow, TrendPoint, ValueRecord } from "./api";
+import type { BudgetRow, SavingsMonth, TrendPoint, ValueRecord } from "./api";
 import { useApp } from "./state";
 import {
   categoryColor,
@@ -66,6 +66,11 @@ function Tip({ x, width, children }: { x: number; width: number; children: React
 function topRounded(x: number, top: number, width: number, bottom: number): string {
   const radius = Math.min(4, bottom - top, width / 2);
   return `M${x},${bottom}V${top + radius}Q${x},${top} ${x + radius},${top}H${x + width - radius}Q${x + width},${top} ${x + width},${top + radius}V${bottom}Z`;
+}
+
+function bottomRounded(x: number, top: number, width: number, bottom: number): string {
+  const radius = Math.min(4, bottom - top, width / 2);
+  return `M${x},${top}V${bottom - radius}Q${x},${bottom} ${x + radius},${bottom}H${x + width - radius}Q${x + width},${bottom} ${x + width},${bottom - radius}V${top}Z`;
 }
 
 const SERIES = [
@@ -341,6 +346,71 @@ export function WeekChart({ days }: { days: DayTotal[] }) {
         </div>
       )}
     </>
+  );
+}
+
+/** Saved months rise from zero and overspent ones hang below it. */
+export function SavingsChart({ months }: { months: SavingsMonth[] }) {
+  const { settings } = useApp();
+  const { ref, width } = useWidth();
+  const [active, setActive] = useState<number | null>(null);
+  const money = (cents: number) => formatMoney(cents, settings.currency);
+
+  const height = 240;
+  const amounts = months.map((month) => month.savedCents);
+  const values = ticks(Math.min(...amounts, 0), Math.max(...amounts, 0));
+  const low = values[0];
+  const high = values[values.length - 1];
+  const y = (value: number) => MARGIN.top + (1 - (value - low) / (high - low)) * (height - MARGIN.top - MARGIN.bottom);
+  const band = (width - MARGIN.left - MARGIN.right) / months.length;
+  const barWidth = Math.min(32, Math.max(2, band - 6));
+  const labelEvery = band >= 34 ? 1 : band >= 18 ? 2 : 3;
+  const zero = y(0);
+
+  return (
+    <div className="chart" ref={ref} onMouseLeave={() => setActive(null)}>
+      {width > 0 && (
+        <svg height={height} role="img" aria-label="Amount saved each month">
+          <YAxis values={values} y={y} width={width} />
+          <line x1={MARGIN.left} x2={width - MARGIN.right} y1={zero} y2={zero} stroke="var(--axis)" />
+          {months.map((month, index) => {
+            const x = MARGIN.left + index * band;
+            const middle = x + band / 2;
+            const left = middle - barWidth / 2;
+            const saved = month.savedCents;
+            return (
+              <g key={month.month}>
+                <rect
+                  className="band"
+                  x={x}
+                  y={MARGIN.top}
+                  width={band}
+                  height={height - MARGIN.top - MARGIN.bottom}
+                  tabIndex={0}
+                  aria-label={`${formatMonth(month.month)}: ${money(saved)}`}
+                  onMouseEnter={() => setActive(index)}
+                  onFocus={() => setActive(index)}
+                  onBlur={() => setActive(null)}
+                />
+                {saved > 0 && <path d={topRounded(left, y(saved), barWidth, zero)} fill="var(--income)" pointerEvents="none" />}
+                {saved < 0 && <path d={bottomRounded(left, zero, barWidth, y(saved))} fill="var(--expense)" pointerEvents="none" />}
+                {(months.length - 1 - index) % labelEvery === 0 && (
+                  <text x={middle} y={height - 7} textAnchor="middle">
+                    {formatMonthShort(month.month)}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      )}
+      {active !== null && (
+        <Tip x={MARGIN.left + (active + 0.5) * band} width={width}>
+          <strong>{formatMonth(months[active].month)}</strong>
+          {months[active].savedCents < 0 ? "Overspent" : "Saved"}: {money(Math.abs(months[active].savedCents))}
+        </Tip>
+      )}
+    </div>
   );
 }
 

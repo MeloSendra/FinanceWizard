@@ -5,7 +5,7 @@ import { ValueChart } from "../charts";
 import { amountText, formatDate, formatFigure, parseAmount, todayIso } from "../format";
 import { CategoryChip, CategorySelect, Confirm, Dialog, Empty, Field, Form, FormError, Money, useAction } from "../ui";
 
-const FREQUENCY: Record<Frequency, string> = { monthly: "per month", quarterly: "per quarter", yearly: "per year" };
+const FREQUENCY: Record<Frequency, string> = { monthly: "per month", quarterly: "every 3 months", yearly: "per year" };
 
 function InstallmentBar({ paid, count }: { paid: number; count: number }) {
   const percent = Math.min(100, (paid / count) * 100);
@@ -279,7 +279,7 @@ function ItemDialog(props: {
           <Field label="Frequency">
             <select value={frequency} onChange={(event) => setFrequency(event.target.value as Frequency)}>
               <option value="monthly">Monthly</option>
-              <option value="quarterly">Quarterly</option>
+              <option value="quarterly">Every 3 months</option>
               <option value="yearly">Yearly</option>
             </select>
           </Field>
@@ -333,7 +333,7 @@ function ItemDialog(props: {
         <FormError message={error} />
         <div className="dialog-actions">
           {item ? (
-            <button type="button" className="ghost" onClick={() => setConfirming(true)}>
+            <button type="button" className="danger" onClick={() => setConfirming(true)}>
               Delete
             </button>
           ) : (
@@ -351,7 +351,7 @@ function ItemDialog(props: {
       {confirming && item && (
         <Confirm
           title="Delete recurring item?"
-          message={`"${item.name}" and its value history will be removed. Its past transactions stay as ordinary transactions.`}
+          message={`"${item.name}" and its value history will be removed${financing ? ", along with what you entered as already paid" : ""}. Its past transactions stay as ordinary transactions.`}
           confirmLabel="Delete"
           onClose={() => setConfirming(false)}
           onConfirm={async () => {
@@ -365,18 +365,30 @@ function ItemDialog(props: {
   );
 }
 
+function ItemGrid(props: { items: RecurringItem[]; onOpen: (item: RecurringItem) => void }) {
+  return (
+    <div className="item-grid">
+      {props.items.map((item) => (
+        <ItemCard key={item.id} item={item} onOpen={() => props.onOpen(item)} />
+      ))}
+    </div>
+  );
+}
+
+/** Completed items fold away, so finished ones don't crowd the active ones. */
 function Section(props: { title: string; items: RecurringItem[]; onOpen: (item: RecurringItem) => void }) {
+  const active = props.items.filter((item) => item.status !== "completed");
+  const completed = props.items.filter((item) => item.status === "completed");
   return (
     <section className="stack">
       <h2>{props.title}</h2>
-      {props.items.length === 0 ? (
-        <p className="hint">None yet.</p>
-      ) : (
-        <div className="item-grid">
-          {props.items.map((item) => (
-            <ItemCard key={item.id} item={item} onOpen={() => props.onOpen(item)} />
-          ))}
-        </div>
+      {props.items.length === 0 && <p className="hint">None yet.</p>}
+      {active.length > 0 && <ItemGrid items={active} onOpen={props.onOpen} />}
+      {completed.length > 0 && (
+        <details className="completed-items">
+          <summary>Completed ({completed.length})</summary>
+          <ItemGrid items={completed} onOpen={props.onOpen} />
+        </details>
       )}
     </section>
   );

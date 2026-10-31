@@ -1,6 +1,6 @@
 [package]
 name = "financewizard"
-version = "0.4.0"
+version = "0.4.1"
 description = "A local personal finance manager"
 license = "MIT"
 authors = ["Josse Sendra"]

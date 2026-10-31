@@ -138,7 +138,7 @@ function DangerZone() {
       {confirming === "range" && (
         <TypedConfirm
           title={`Delete ${count} ${count === 1 ? "transaction" : "transactions"}?`}
-          message={`Everything from ${formatDate(from)} to ${formatDate(to)} is removed, and financing progress goes down to match. Deleted scheduled payments move to Past payments on their item. ${safety}`}
+          message={`Everything from ${formatDate(from)} to ${formatDate(to)} is removed, financing progress goes down to match, and those months leave your savings history. Deleted scheduled payments move to Past payments on their item. ${safety}`}
           confirmLabel="Delete"
           onClose={() => setConfirming(null)}
           onConfirm={async () => {

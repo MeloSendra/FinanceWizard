@@ -1,3 +1,4 @@
+use crate::dates::month_bounds;
 use crate::db::{self, APPLICATION_ID};
 use crate::error::{AppError, Result, invalid};
 use crate::transactions::{self, TransactionFilter};
@@ -8,6 +9,8 @@ use std::path::Path;
 
 const LAST_BACKUP: &str = "last_backup_at";
 const CURRENCY: &str = "currency";
+pub const SAVINGS_OPENING: &str = "savings_opening_cents";
+pub const SAVINGS_START: &str = "savings_start_month";
 const DEFAULT_CURRENCY: &str = "EUR";
 const MIN_PASSPHRASE_LENGTH: usize = 12;
 
@@ -16,6 +19,8 @@ const MIN_PASSPHRASE_LENGTH: usize = 12;
 pub struct Settings {
     pub currency: String,
     pub last_backup_at: Option<String>,
+    pub savings_opening_cents: i64,
+    pub savings_start_month: Option<String>,
 }
 
 fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
@@ -37,7 +42,23 @@ pub fn settings(conn: &Connection) -> Result<Settings> {
     Ok(Settings {
         currency: get_setting(conn, CURRENCY)?.unwrap_or_else(|| DEFAULT_CURRENCY.to_string()),
         last_backup_at: get_setting(conn, LAST_BACKUP)?,
+        savings_opening_cents: get_setting(conn, SAVINGS_OPENING)?.and_then(|cents| cents.parse().ok()).unwrap_or(0),
+        savings_start_month: get_setting(conn, SAVINGS_START)?,
     })
+}
+
+/// With no start month, savings count from the first recorded transaction.
+pub fn set_savings(conn: &Connection, opening_cents: i64, start_month: Option<&str>) -> Result<()> {
+    if opening_cents < 0 {
+        return invalid("Your starting savings cannot be negative.");
+    }
+    if let Some(month) = start_month {
+        month_bounds(month)?;
+        put_setting(conn, SAVINGS_START, month)?;
+    } else {
+        conn.execute("DELETE FROM settings WHERE key = ?1", [SAVINGS_START])?;
+    }
+    put_setting(conn, SAVINGS_OPENING, &opening_cents.to_string())
 }
 
 pub fn set_currency(conn: &Connection, currency: &str) -> Result<()> {

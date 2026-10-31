@@ -1,6 +1,8 @@
 use crate::categories::{self, Kind};
 use crate::dates::parse_date;
 use crate::error::{AppError, Result, invalid};
+use crate::recurring::{self, RecurringItem};
+use chrono::NaiveDate;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +39,14 @@ pub struct TransactionFilter {
     pub kind: Option<Kind>,
     /// Matches the category and all its subcategories.
     pub category_id: Option<i64>,
+}
+
+/// A note typed before, with the category it was last used with.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Suggestion {
+    pub description: String,
+    pub category_id: i64,
 }
 
 const SELECT: &str = "
@@ -89,6 +99,20 @@ pub fn list(conn: &Connection, filter: &TransactionFilter) -> Result<Vec<Transac
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// Most used first, then most recent. Scheduled payments are left out since
+/// nobody types those. With MAX, SQLite takes the other columns from the latest row.
+pub fn suggestions(conn: &Connection, kind: Kind) -> Result<Vec<Suggestion>> {
+    let mut statement = conn.prepare(
+        "SELECT t.description, t.category_id, MAX(t.date)
+         FROM transactions t JOIN categories c ON c.id = t.category_id
+         WHERE c.kind = ?1 AND c.archived = 0 AND t.description <> '' AND t.scheduled_date IS NULL
+         GROUP BY t.description COLLATE NOCASE
+         ORDER BY COUNT(*) DESC, MAX(t.date) DESC",
+    )?;
+    let rows = statement.query_map([kind], |row| Ok(Suggestion { description: row.get(0)?, category_id: row.get(1)? }))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 pub fn get(conn: &Connection, id: i64) -> Result<Transaction> {
     conn.query_row(&format!("{SELECT} WHERE t.id = ?1"), [id], from_row)
         .optional()?
@@ -104,8 +128,10 @@ fn validate(conn: &Connection, input: &TransactionInput, current_category: Optio
     if category.archived && current_category != Some(category.id) {
         return invalid("Archived categories cannot be used for new entries.");
     }
-    if input.recurring_item_id.is_some() && category.kind != Kind::Expense {
-        return invalid("Recurring payments must use an expense category.");
+    if let Some(item_id) = input.recurring_item_id
+        && recurring::kind_of(conn, item_id)? != category.kind
+    {
+        return invalid("A payment and its recurring item must both be income or both be expenses.");
     }
     Ok(())
 }
@@ -120,23 +146,34 @@ pub fn create(conn: &Connection, input: &TransactionInput) -> Result<Transaction
     get(conn, conn.last_insert_rowid())
 }
 
-pub fn update(conn: &Connection, id: i64, input: &TransactionInput) -> Result<Transaction> {
+/// The recurring item a payment counts toward, read before the payment changes.
+fn linked_item(conn: &Connection, transaction: &Transaction, today: NaiveDate) -> Result<Option<RecurringItem>> {
+    transaction.recurring_item_id.map(|id| recurring::get(conn, id, today)).transpose()
+}
+
+pub fn update(conn: &Connection, id: i64, input: &TransactionInput, today: NaiveDate) -> Result<Transaction> {
     let existing = get(conn, id)?;
     validate(conn, input, Some(existing.category_id))?;
+    let linked = linked_item(conn, &existing, today)?;
     conn.execute(
         "UPDATE transactions
          SET date = ?1, amount_cents = ?2, description = ?3, category_id = ?4, recurring_item_id = ?5
          WHERE id = ?6",
         params![input.date, input.amount_cents, input.description.trim(), input.category_id, input.recurring_item_id, id],
     )?;
+    if let Some(item) = linked {
+        recurring::reopen_if_unfinished(conn, &item, today)?;
+    }
     get(conn, id)
 }
 
-pub fn delete(conn: &Connection, id: i64) -> Result<()> {
-    match conn.execute("DELETE FROM transactions WHERE id = ?1", [id])? {
-        0 => Err(AppError::NotFound),
-        _ => Ok(()),
+pub fn delete(conn: &Connection, id: i64, today: NaiveDate) -> Result<()> {
+    let linked = linked_item(conn, &get(conn, id)?, today)?;
+    conn.execute("DELETE FROM transactions WHERE id = ?1", [id])?;
+    if let Some(item) = linked {
+        recurring::reopen_if_unfinished(conn, &item, today)?;
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -152,6 +189,47 @@ mod tests {
 
     fn input(date: &str, amount_cents: i64, category_id: i64) -> TransactionInput {
         TransactionInput { date: date.into(), amount_cents, description: String::new(), category_id, recurring_item_id: None }
+    }
+
+    fn noted(conn: &Connection, date: &str, note: &str, category_id: i64) {
+        create(conn, &TransactionInput { description: note.into(), ..input(date, 100, category_id) }).unwrap();
+    }
+
+    #[test]
+    fn suggestions_rank_by_use_and_keep_the_latest_category() {
+        let conn = test_connection();
+        let food = category(&conn, "Food", Kind::Expense, None);
+        let treats = category(&conn, "Treats", Kind::Expense, None);
+        noted(&conn, "2026-01-01", "Bakery", food);
+        noted(&conn, "2026-02-01", "Lidl", food);
+        noted(&conn, "2026-02-02", "lidl", treats);
+        noted(&conn, "2026-02-03", "", food);
+
+        let found = suggestions(&conn, Kind::Expense).unwrap();
+        let summary: Vec<_> = found.iter().map(|s| (s.description.as_str(), s.category_id)).collect();
+        assert_eq!(summary, [("lidl", treats), ("Bakery", food)]);
+    }
+
+    #[test]
+    fn suggestions_skip_other_kinds_archived_categories_and_scheduled_payments() {
+        let conn = test_connection();
+        let food = category(&conn, "Food", Kind::Expense, None);
+        let old = category(&conn, "Old", Kind::Expense, None);
+        let salary = category(&conn, "Salary", Kind::Income, None);
+        noted(&conn, "2026-01-01", "Lidl", food);
+        noted(&conn, "2026-01-01", "Gone", old);
+        noted(&conn, "2026-01-01", "Pay", salary);
+        categories::set_archived(&conn, old, true).unwrap();
+        conn.execute(
+            "INSERT INTO transactions (date, amount_cents, description, category_id, scheduled_date)
+             VALUES ('2026-01-01', 100, 'Gym', ?1, '2026-01-01')",
+            [food],
+        )
+        .unwrap();
+
+        let found = suggestions(&conn, Kind::Expense).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].description, "Lidl");
     }
 
     #[test]
@@ -178,7 +256,8 @@ mod tests {
         let existing = create(&conn, &input("2026-01-01", 100, food)).unwrap();
         categories::set_archived(&conn, food, true).unwrap();
         assert!(create(&conn, &input("2026-01-02", 100, food)).is_err());
-        update(&conn, existing.id, &input("2026-01-03", 200, food)).unwrap();
+        let today = crate::dates::parse_date("2026-01-03").unwrap();
+        update(&conn, existing.id, &input("2026-01-03", 200, food), today).unwrap();
     }
 
     #[test]

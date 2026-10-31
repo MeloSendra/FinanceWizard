@@ -4,7 +4,7 @@ import { coinDropEnabled, comparisonText, GoldPieces, loadCoins, Treasure } from
 import { useApp, useLoad } from "../state";
 import { TrendChart } from "../charts";
 import { formatDate, formatMoney } from "../format";
-import { CategoryChip, Empty, Money, MonthNav } from "../ui";
+import { CategoryChip, Empty, GetStarted, Money, MonthNav } from "../ui";
 
 function greeting(): string {
   const hour = new Date().getHours();
@@ -26,7 +26,7 @@ export function OverBudget() {
 function MoneyRemaining({ report }: { report: MonthReport }) {
   const { settings, droppedCoins, clearDroppedCoins } = useApp();
   const [coins] = useState(loadCoins);
-  const remaining = report.incomeCents - report.projectedCents;
+  const remaining = report.projectedIncomeCents - report.projectedCents;
   const className = `stat-value${remaining < 0 ? " negative" : ""}`;
   const real = <Money cents={remaining} />;
 
@@ -48,10 +48,15 @@ function MoneyRemaining({ report }: { report: MonthReport }) {
           after <Money cents={report.upcomingCents} /> still due
         </div>
       )}
+      {report.upcomingIncomeCents > 0 && (
+        <div className="hint">
+          includes <Money cents={report.upcomingIncomeCents} /> expected
+        </div>
+      )}
       {coins.style === "treasure" && (
         <Treasure
           remainingCents={remaining}
-          incomeCents={report.incomeCents}
+          incomeCents={report.projectedIncomeCents}
           dropped={coinDropEnabled(coins) ? droppedCoins : 0}
           onDropped={clearDroppedCoins}
         />
@@ -61,12 +66,14 @@ function MoneyRemaining({ report }: { report: MonthReport }) {
 }
 
 export default function Dashboard() {
-  const { month, categories } = useApp();
+  const { month, categories, setPage } = useApp();
   const report = useLoad(() => api.monthReport(month), [month]);
+  const savings = useLoad(() => api.savingsReport(), []);
   if (!report) return null;
 
   const alerts = report.rows.filter((row) => row.budgetCents !== null && row.projectedCents > row.budgetCents);
   const isEmpty = report.trend.every((point) => point.incomeCents === 0 && point.expenseCents === 0);
+  const scheduled = [...report.upcoming, ...report.upcomingIncome].sort((a, b) => a.date.localeCompare(b.date));
 
   return (
     <div className="page">
@@ -74,6 +81,8 @@ export default function Dashboard() {
         <h1>{greeting()}</h1>
         <MonthNav />
       </header>
+
+      {categories.length === 0 && <GetStarted onOwn={() => setPage("Categories")} />}
 
       <section className="hero-row">
         <div className="card">
@@ -94,11 +103,24 @@ export default function Dashboard() {
           <div className="stat-value">
             <Money cents={report.incomeCents} />
           </div>
+          {report.upcomingIncomeCents > 0 && (
+            <div className="hint">
+              +<Money cents={report.upcomingIncomeCents} /> expected
+            </div>
+          )}
         </div>
         <div className="card">
           <div className="stat-label">Budget</div>
           <div className="stat-value">{report.budgetCents === null ? "None set" : <Money cents={report.budgetCents} />}</div>
         </div>
+        {savings && (
+          <button type="button" className="card savings-card" onClick={() => setPage("Savings")}>
+            <div className="stat-label">Total savings</div>
+            <div className={`stat-value${savings.totalCents < 0 ? " negative" : ""}`}>
+              <Money cents={savings.totalCents} />
+            </div>
+          </button>
+        )}
       </section>
 
       <section className="card">
@@ -136,17 +158,18 @@ export default function Dashboard() {
         </section>
         <section className="card">
           <h2>Still due this month</h2>
-          {report.upcoming.length === 0 ? (
+          {scheduled.length === 0 ? (
             <p className="hint">No scheduled payments left in this month.</p>
           ) : (
-            report.upcoming.map((payment) => (
+            scheduled.map((payment) => (
               <div className="status-line" key={`${payment.recurringItemId}-${payment.date}`}>
                 <span>
                   {payment.name}
                   <br />
                   <span className="hint">{formatDate(payment.date)}</span>
                 </span>
-                <span className="num">
+                <span className={`num${payment.kind === "income" ? " income-text" : ""}`}>
+                  {payment.kind === "income" && "+"}
                   <Money cents={payment.amountCents} />
                 </span>
               </div>

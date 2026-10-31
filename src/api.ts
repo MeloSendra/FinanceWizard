@@ -54,6 +54,11 @@ export interface TransactionFilter {
   categoryId?: number | null;
 }
 
+export interface Suggestion {
+  description: string;
+  categoryId: number;
+}
+
 export interface RecurringItem {
   id: number;
   name: string;
@@ -64,6 +69,7 @@ export interface RecurringItem {
   status: Status;
   categoryId: number;
   categoryName: string;
+  kind: Kind;
   scheduleDay: number | null;
   generatedThrough: string;
   totalCents: number | null;
@@ -109,6 +115,7 @@ export interface UpcomingPayment {
   date: string;
   amountCents: number;
   categoryId: number;
+  kind: Kind;
 }
 
 export interface BudgetRow {
@@ -131,18 +138,36 @@ export interface TrendPoint {
 export interface MonthReport {
   month: string;
   incomeCents: number;
+  upcomingIncomeCents: number;
+  projectedIncomeCents: number;
   spentCents: number;
   upcomingCents: number;
   projectedCents: number;
   budgetCents: number | null;
   rows: BudgetRow[];
   upcoming: UpcomingPayment[];
+  upcomingIncome: UpcomingPayment[];
   trend: TrendPoint[];
+}
+
+export interface SavingsMonth {
+  month: string;
+  incomeCents: number;
+  expenseCents: number;
+  savedCents: number;
+}
+
+export interface SavingsReport {
+  totalCents: number;
+  currentMonthCents: number;
+  months: SavingsMonth[];
 }
 
 export interface Settings {
   currency: string;
   lastBackupAt: string | null;
+  savingsOpeningCents: number;
+  savingsStartMonth: string | null;
 }
 
 export type VaultStatus = "setup" | "locked" | "recovery" | "unlocked";
@@ -164,8 +189,10 @@ export const api = {
   updateCategory: (id: number, input: CategoryInput) => invoke<Category>("update_category", { id, input }),
   setCategoryArchived: (id: number, archived: boolean) => invoke<Category>("set_category_archived", { id, archived }),
   deleteCategory: (id: number) => invoke<void>("delete_category", { id }),
+  createStarterCategories: () => invoke<void>("create_starter_categories"),
 
   listTransactions: (filter: TransactionFilter) => invoke<Transaction[]>("list_transactions", { filter }),
+  transactionSuggestions: (kind: Kind) => invoke<Suggestion[]>("transaction_suggestions", { kind }),
   createTransaction: (input: TransactionInput) => invoke<Transaction>("create_transaction", { input }),
   updateTransaction: (id: number, input: TransactionInput) => invoke<Transaction>("update_transaction", { id, input }),
   deleteTransaction: (id: number) => invoke<void>("delete_transaction", { id }),
@@ -190,6 +217,9 @@ export const api = {
   setBudget: (month: string, categoryId: number, amountCents: number) =>
     invoke<void>("set_budget", { month, categoryId, amountCents }),
   clearBudget: (month: string, categoryId: number) => invoke<void>("clear_budget", { month, categoryId }),
+
+  savingsReport: () => invoke<SavingsReport>("savings_report"),
+  setSavings: (openingCents: number, startMonth: string | null) => invoke<void>("set_savings", { openingCents, startMonth }),
 
   getSettings: () => invoke<Settings>("get_settings"),
   setCurrency: (currency: string) => invoke<void>("set_currency", { currency }),

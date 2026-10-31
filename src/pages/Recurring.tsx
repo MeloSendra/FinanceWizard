@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { api, type Frequency, type ItemType, type RecurringItem, type Status, type ValueRecord } from "../api";
+import { api, type Frequency, type ItemType, type Kind, type RecurringItem, type Status, type ValueRecord } from "../api";
 import { useApp, useLoad } from "../state";
 import { ValueChart } from "../charts";
 import { amountText, formatDate, formatFigure, parseAmount, todayIso } from "../format";
 import { CategoryChip, CategorySelect, Confirm, Dialog, Empty, Field, Form, FormError, Money, useAction } from "../ui";
 
-const FREQUENCY: Record<Frequency, string> = { monthly: "per month", quarterly: "per quarter", yearly: "per year" };
+const FREQUENCY: Record<Frequency, string> = { monthly: "per month", quarterly: "every 3 months", yearly: "per year" };
 
 function InstallmentBar({ paid, count }: { paid: number; count: number }) {
   const percent = Math.min(100, (paid / count) * 100);
@@ -211,10 +211,11 @@ function ValueHistory({ item }: { item: RecurringItem }) {
 function ItemDialog(props: {
   item: RecurringItem | null;
   itemType: ItemType;
+  kind: Kind;
   onClose: () => void;
   onCreated?: (id: number) => void;
 }) {
-  const { item, itemType, onClose } = props;
+  const { item, itemType, kind, onClose } = props;
   const { refresh } = useApp();
   const { error, setError, busy, run } = useAction();
   const [name, setName] = useState(item?.name ?? "");
@@ -232,6 +233,7 @@ function ItemDialog(props: {
   const [openingInstallments, setOpeningInstallments] = useState(String(item?.openingPaidInstallments || ""));
   const [confirming, setConfirming] = useState(false);
   const financing = itemType === "financing";
+  const income = kind === "income";
 
   const save = () => {
     if (categoryId === null) return setError("Choose a category.");
@@ -266,7 +268,7 @@ function ItemDialog(props: {
   };
 
   return (
-    <Dialog title={`${item ? "Edit" : "New"} ${financing ? "financing" : "subscription"}`} onClose={onClose}>
+    <Dialog title={`${item ? "Edit" : "New"} ${financing ? "financing" : income ? "income" : "subscription"}`} onClose={onClose}>
       {item && <PastPayments item={item} />}
       <Form onSubmit={save}>
         <Field label="Name">
@@ -274,12 +276,12 @@ function ItemDialog(props: {
         </Field>
         <div className="form-grid">
           <Field label="Category">
-            <CategorySelect value={categoryId} onChange={setCategoryId} kind="expense" placeholder="Choose a category" />
+            <CategorySelect value={categoryId} onChange={setCategoryId} kind={kind} placeholder="Choose a category" />
           </Field>
           <Field label="Frequency">
             <select value={frequency} onChange={(event) => setFrequency(event.target.value as Frequency)}>
               <option value="monthly">Monthly</option>
-              <option value="quarterly">Quarterly</option>
+              <option value="quarterly">Every 3 months</option>
               <option value="yearly">Yearly</option>
             </select>
           </Field>
@@ -297,10 +299,10 @@ function ItemDialog(props: {
         )}
         <label className="check">
           <input type="checkbox" checked={scheduled} onChange={(event) => setScheduled(event.target.checked)} />
-          Create payments automatically
+          {income ? "Add it automatically on payday" : "Create payments automatically"}
         </label>
         {scheduled && (
-          <Field label="Payment day" hint="Short months use their last day.">
+          <Field label={income ? "Payday" : "Payment day"} hint="Short months use their last day.">
             <input type="number" min={1} max={31} required value={scheduleDay} onChange={(event) => setScheduleDay(event.target.value)} />
           </Field>
         )}
@@ -333,7 +335,7 @@ function ItemDialog(props: {
         <FormError message={error} />
         <div className="dialog-actions">
           {item ? (
-            <button type="button" className="ghost" onClick={() => setConfirming(true)}>
+            <button type="button" className="danger" onClick={() => setConfirming(true)}>
               Delete
             </button>
           ) : (
@@ -351,7 +353,7 @@ function ItemDialog(props: {
       {confirming && item && (
         <Confirm
           title="Delete recurring item?"
-          message={`"${item.name}" and its value history will be removed. Its past transactions stay as ordinary transactions.`}
+          message={`"${item.name}" and its value history will be removed${financing ? ", along with what you entered as already paid" : ""}. Its past transactions stay as ordinary transactions.`}
           confirmLabel="Delete"
           onClose={() => setConfirming(false)}
           onConfirm={async () => {
@@ -365,18 +367,30 @@ function ItemDialog(props: {
   );
 }
 
+function ItemGrid(props: { items: RecurringItem[]; onOpen: (item: RecurringItem) => void }) {
+  return (
+    <div className="item-grid">
+      {props.items.map((item) => (
+        <ItemCard key={item.id} item={item} onOpen={() => props.onOpen(item)} />
+      ))}
+    </div>
+  );
+}
+
+/** Completed items fold away, so finished ones don't crowd the active ones. */
 function Section(props: { title: string; items: RecurringItem[]; onOpen: (item: RecurringItem) => void }) {
+  const active = props.items.filter((item) => item.status !== "completed");
+  const completed = props.items.filter((item) => item.status === "completed");
   return (
     <section className="stack">
       <h2>{props.title}</h2>
-      {props.items.length === 0 ? (
-        <p className="hint">None yet.</p>
-      ) : (
-        <div className="item-grid">
-          {props.items.map((item) => (
-            <ItemCard key={item.id} item={item} onOpen={() => props.onOpen(item)} />
-          ))}
-        </div>
+      {props.items.length === 0 && <p className="hint">None yet.</p>}
+      {active.length > 0 && <ItemGrid items={active} onOpen={props.onOpen} />}
+      {completed.length > 0 && (
+        <details className="completed-items">
+          <summary>Completed ({completed.length})</summary>
+          <ItemGrid items={completed} onOpen={props.onOpen} />
+        </details>
       )}
     </section>
   );
@@ -386,33 +400,49 @@ export default function Recurring() {
   const { categories } = useApp();
   const items = useLoad(() => api.listRecurring(), []);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [creating, setCreating] = useState<ItemType | null>(null);
+  const [creating, setCreating] = useState<ItemType | "income" | null>(null);
   const editing = items?.find((item) => item.id === editingId) ?? null;
-  const noCategories = !categories.some((category) => category.kind === "expense");
+  const noExpenseCategories = !categories.some((category) => category.kind === "expense");
+  const noIncomeCategories = !categories.some((category) => category.kind === "income");
   const open = (item: RecurringItem) => setEditingId(item.id);
+  const ofType = (itemType: ItemType, kind: Kind) => items?.filter((item) => item.itemType === itemType && item.kind === kind) ?? [];
 
   return (
     <div className="page">
       <header className="page-header">
         <h1>Recurring</h1>
         <div className="row">
-          <button type="button" disabled={noCategories} onClick={() => setCreating("subscription")}>
+          <button type="button" disabled={noIncomeCategories} onClick={() => setCreating("income")}>
+            New income
+          </button>
+          <button type="button" disabled={noExpenseCategories} onClick={() => setCreating("subscription")}>
             New subscription
           </button>
-          <button type="button" className="primary" disabled={noCategories} onClick={() => setCreating("financing")}>
+          <button type="button" className="primary" disabled={noExpenseCategories} onClick={() => setCreating("financing")}>
             New financing
           </button>
         </div>
       </header>
-      {noCategories && (
+      {noExpenseCategories && noIncomeCategories && (
         <section className="card">
-          <Empty title="Add an expense category first">Recurring items post their payments to a category.</Empty>
+          <Empty title="Add a category first">Recurring items post their payments to a category.</Empty>
         </section>
       )}
-      <Section title="Financing" items={items?.filter((item) => item.itemType === "financing") ?? []} onOpen={open} />
-      <Section title="Subscriptions" items={items?.filter((item) => item.itemType === "subscription") ?? []} onOpen={open} />
-      {creating && <ItemDialog item={null} itemType={creating} onClose={() => setCreating(null)} onCreated={setEditingId} />}
-      {editing && <ItemDialog key={editing.id} item={editing} itemType={editing.itemType} onClose={() => setEditingId(null)} />}
+      <Section title="Income" items={ofType("subscription", "income")} onOpen={open} />
+      <Section title="Financing" items={ofType("financing", "expense")} onOpen={open} />
+      <Section title="Subscriptions" items={ofType("subscription", "expense")} onOpen={open} />
+      {creating && (
+        <ItemDialog
+          item={null}
+          itemType={creating === "income" ? "subscription" : creating}
+          kind={creating === "income" ? "income" : "expense"}
+          onClose={() => setCreating(null)}
+          onCreated={setEditingId}
+        />
+      )}
+      {editing && (
+        <ItemDialog key={editing.id} item={editing} itemType={editing.itemType} kind={editing.kind} onClose={() => setEditingId(null)} />
+      )}
     </div>
   );
 }

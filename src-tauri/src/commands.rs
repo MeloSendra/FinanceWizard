@@ -1,10 +1,10 @@
 use crate::backup::{self, Settings};
-use crate::categories::{self, Category, CategoryInput};
+use crate::categories::{self, Category, CategoryInput, Kind};
 use crate::error::{AppError, Result};
 use crate::purge;
 use crate::recurring::{self, MissedPayment, RecurringInput, RecurringItem, ValueRecord};
-use crate::reports::{self, MonthReport};
-use crate::transactions::{self, Transaction, TransactionFilter, TransactionInput};
+use crate::reports::{self, MonthReport, SavingsReport};
+use crate::transactions::{self, Suggestion, Transaction, TransactionFilter, TransactionInput};
 use crate::vault::{self, DATABASE_FILE, Key, Status};
 use chrono::{Local, NaiveDate};
 use rusqlite::Connection;
@@ -145,8 +145,18 @@ pub fn delete_category(db: State<Database>, id: i64) -> Result<()> {
 }
 
 #[tauri::command]
+pub fn create_starter_categories(db: State<Database>) -> Result<()> {
+    categories::create_starter(&mut *db.lock()?)
+}
+
+#[tauri::command]
 pub fn list_transactions(db: State<Database>, filter: TransactionFilter) -> Result<Vec<Transaction>> {
     transactions::list(&*db.lock()?, &filter)
+}
+
+#[tauri::command]
+pub fn transaction_suggestions(db: State<Database>, kind: Kind) -> Result<Vec<Suggestion>> {
+    transactions::suggestions(&*db.lock()?, kind)
 }
 
 #[tauri::command]
@@ -156,12 +166,12 @@ pub fn create_transaction(db: State<Database>, input: TransactionInput) -> Resul
 
 #[tauri::command]
 pub fn update_transaction(db: State<Database>, id: i64, input: TransactionInput) -> Result<Transaction> {
-    transactions::update(&*db.lock()?, id, &input)
+    transactions::update(&*db.lock()?, id, &input, today())
 }
 
 #[tauri::command]
 pub fn delete_transaction(db: State<Database>, id: i64) -> Result<()> {
-    transactions::delete(&*db.lock()?, id)
+    transactions::delete(&*db.lock()?, id, today())
 }
 
 #[tauri::command]
@@ -222,6 +232,16 @@ pub fn add_missed_payments(db: State<Database>, id: i64, dates: Vec<String>) -> 
 #[tauri::command]
 pub fn month_report(db: State<Database>, month: String) -> Result<MonthReport> {
     reports::month_report(&*db.lock()?, &month, today())
+}
+
+#[tauri::command]
+pub fn savings_report(db: State<Database>) -> Result<SavingsReport> {
+    reports::savings_report(&*db.lock()?, today())
+}
+
+#[tauri::command]
+pub fn set_savings(db: State<Database>, opening_cents: i64, start_month: Option<String>) -> Result<()> {
+    backup::set_savings(&*db.lock()?, opening_cents, start_month.as_deref())
 }
 
 #[tauri::command]
@@ -340,7 +360,7 @@ pub fn purge_transactions(db: State<Database>, from: String, to: String) -> Resu
     let mut unlocked = db.lock()?;
     let session = unlocked.session();
     crate::db::export_to(&session.conn, &safety, &session.key.sql())?;
-    purge::delete_transactions(&session.conn, &from, &to)
+    purge::delete_transactions(&session.conn, &from, &to, today())
 }
 
 #[tauri::command(async)]

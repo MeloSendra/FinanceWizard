@@ -204,6 +204,36 @@ pub fn set_archived(conn: &Connection, id: i64, archived: bool) -> Result<Catego
     get(conn, id)
 }
 
+const STARTER: &[(&str, Kind, &[&str])] = &[
+    ("Housing", Kind::Expense, &["Rent", "Utilities"]),
+    ("Food", Kind::Expense, &["Groceries", "Eating out"]),
+    ("Transport", Kind::Expense, &[]),
+    ("Health", Kind::Expense, &[]),
+    ("Leisure", Kind::Expense, &[]),
+    ("Subscriptions", Kind::Expense, &[]),
+    ("Salary", Kind::Income, &[]),
+    ("Other income", Kind::Income, &[]),
+];
+
+/// Offered on first run, so it only works while there are no categories.
+pub fn create_starter(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    if !list(&tx)?.is_empty() {
+        return invalid("You already have categories.");
+    }
+    let add = |name: &str, kind, parent_id| {
+        create(&tx, &CategoryInput { name: name.into(), kind, parent_id, default_budget_cents: None, color: None })
+    };
+    for (name, kind, children) in STARTER {
+        let parent = add(name, *kind, None)?;
+        for child in *children {
+            add(child, *kind, Some(parent.id))?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// Deleting is only allowed for unused categories, since removing one with
 /// history would change past reports. Those are archived instead.
 pub fn delete(conn: &Connection, id: i64) -> Result<()> {
@@ -225,6 +255,21 @@ mod tests {
 
     fn input(name: &str, kind: Kind, parent_id: Option<i64>) -> CategoryInput {
         CategoryInput { name: name.into(), kind, parent_id, default_budget_cents: None, color: None }
+    }
+
+    #[test]
+    fn starter_categories_only_fill_an_empty_list_and_can_be_removed() {
+        let mut conn = test_connection();
+        create_starter(&mut conn).unwrap();
+        let all = list(&conn).unwrap();
+        assert_eq!(all.len(), 12);
+        assert!(all.iter().any(|c| c.name == "Salary" && c.kind == Kind::Income));
+        let rent = all.iter().find(|c| c.name == "Rent").unwrap();
+        assert!(rent.parent_id.is_some());
+
+        assert!(create_starter(&mut conn).is_err());
+        assert_eq!(list(&conn).unwrap().len(), 12);
+        delete(&conn, rent.id).unwrap();
     }
 
     #[test]

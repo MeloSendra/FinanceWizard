@@ -256,6 +256,7 @@ export function TreeToggle({ name, open, onToggle, tabbable = true }: { name: st
 const PICKER_GAP = 4;
 const PICKER_MIN_WIDTH = 240;
 const PICKER_MAX_HEIGHT = 320;
+const PICKER_MIN_BELOW = 200;
 
 /** Archived categories are only offered when they are already selected. */
 export function CategorySelect(props: {
@@ -300,7 +301,7 @@ export function CategorySelect(props: {
     const box = trigger.current?.getBoundingClientRect();
     if (!box) return;
     const below = window.innerHeight - box.bottom - PICKER_GAP * 2;
-    const flip = below < PICKER_MAX_HEIGHT && box.top > below;
+    const flip = below < PICKER_MIN_BELOW && box.top > below;
     const width = Math.max(box.width, PICKER_MIN_WIDTH);
     setPosition({
       left: Math.min(box.left, window.innerWidth - width - PICKER_GAP),

@@ -641,6 +641,10 @@ tfoot td {
   white-space: nowrap;
 }
 
+.picker-trigger .hint {
+  font-size: inherit;
+}
+
 .picker-arrow {
   margin-left: auto;
   color: var(--muted);

@@ -1,9 +1,84 @@
-import { useState } from "react";
-import { api, type Kind, type Transaction } from "../api";
+import { useState, type KeyboardEvent } from "react";
+import { api, type Kind, type Suggestion, type Transaction } from "../api";
 import { useApp, useLoad } from "../state";
 import { WeekChart } from "../charts";
 import { addDays, amountText, formatDate, formatDayMonth, monthBounds, parseAmount, startOfWeek, todayIso, weekForMonth } from "../format";
 import { CategoryChip, CategorySelect, Confirm, Dialog, Empty, Field, Form, FormError, Money, MonthNav, useAction } from "../ui";
+
+const MAX_SUGGESTIONS = 6;
+
+/** Past notes that contain the text, those starting with it first. */
+function matchingNotes(suggestions: Suggestion[], text: string): Suggestion[] {
+  const needle = text.trim().toLowerCase();
+  if (!needle) return [];
+  const notes = suggestions.map((entry) => ({ entry, note: entry.description.toLowerCase() }));
+  const matches = notes.filter(({ note }) => note.includes(needle) && note !== needle);
+  return [...matches.filter(({ note }) => note.startsWith(needle)), ...matches.filter(({ note }) => !note.startsWith(needle))]
+    .slice(0, MAX_SUGGESTIONS)
+    .map(({ entry }) => entry);
+}
+
+function DescriptionInput(props: { kind: Kind; value: string; onChange: (text: string) => void; onPick: (entry: Suggestion) => void }) {
+  const suggestions = useLoad(() => api.transactionSuggestions(props.kind), [props.kind]);
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(-1);
+  const matches = open ? matchingNotes(suggestions ?? [], props.value) : [];
+
+  const pick = (entry: Suggestion) => {
+    props.onPick(entry);
+    setOpen(false);
+  };
+
+  // Enter only belongs to the list once a suggestion is highlighted, so it
+  // still saves the form otherwise. Esc closes the list before the dialog.
+  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (matches.length === 0) return;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : matches.length - 1;
+      setActive(active < 0 && step !== 1 ? matches.length - 1 : (active + step) % matches.length);
+    } else if (event.key === "Enter" && active >= 0) {
+      event.preventDefault();
+      pick(matches[active]);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      setOpen(false);
+    }
+  };
+
+  return (
+    <div className="suggest">
+      <input
+        autoComplete="off"
+        value={props.value}
+        onChange={(event) => {
+          props.onChange(event.target.value);
+          setOpen(true);
+          setActive(-1);
+        }}
+        onKeyDown={onKeyDown}
+        onBlur={() => setOpen(false)}
+      />
+      {matches.length > 0 && (
+        <div className="suggest-list">
+          {matches.map((entry, index) => (
+            <button
+              key={entry.description}
+              type="button"
+              tabIndex={-1}
+              className="picker-option"
+              aria-pressed={index === active}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => pick(entry)}
+            >
+              {entry.description}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function TransactionDialog({ transaction, onClose }: { transaction: Transaction | null; onClose: () => void }) {
   const { categories, refresh } = useApp();
@@ -54,7 +129,15 @@ function TransactionDialog({ transaction, onClose }: { transaction: Transaction 
           </Field>
         </div>
         <Field label="Description">
-          <input value={description} onChange={(event) => setDescription(event.target.value)} />
+          <DescriptionInput
+            kind={kind}
+            value={description}
+            onChange={setDescription}
+            onPick={(entry) => {
+              setDescription(entry.description);
+              if (categoryId === null) setCategoryId(entry.categoryId);
+            }}
+          />
         </Field>
         <Field label="Category">
           <CategorySelect

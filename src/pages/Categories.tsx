@@ -2,7 +2,7 @@ import { useState } from "react";
 import { api, type Category, type Kind } from "../api";
 import { useApp, useLoad } from "../state";
 import { amountText, categoryTree, expandedTree, formatDate, nextPaletteColor, paletteColor, parseAmount } from "../format";
-import { CategoryChip, CategorySelect, Confirm, Dialog, Empty, Field, Form, FormError, Money, TreeToggle, useAction, useCategoryStyle, useExpandedCategories } from "../ui";
+import { CategoryChip, CategorySelect, Confirm, Dialog, Empty, Field, Form, FormError, GetStarted, Money, TreeToggle, useAction, useCategoryStyle, useExpandedCategories } from "../ui";
 
 interface Draft {
   category: Category | null;
@@ -242,9 +242,7 @@ export default function Categories() {
         </button>
       </header>
       {categories.length === 0 ? (
-        <section className="card">
-          <Empty title="No categories yet">Categories organise your transactions and hold your budgets.</Empty>
-        </section>
+        <GetStarted onOwn={() => setDraft({ category: null, kind: "expense", parentId: null })} />
       ) : (
         <div className="two-columns">
           <div className="stack">

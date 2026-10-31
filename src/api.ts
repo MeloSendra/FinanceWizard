@@ -54,6 +54,11 @@ export interface TransactionFilter {
   categoryId?: number | null;
 }
 
+export interface Suggestion {
+  description: string;
+  categoryId: number;
+}
+
 export interface RecurringItem {
   id: number;
   name: string;
@@ -164,8 +169,10 @@ export const api = {
   updateCategory: (id: number, input: CategoryInput) => invoke<Category>("update_category", { id, input }),
   setCategoryArchived: (id: number, archived: boolean) => invoke<Category>("set_category_archived", { id, archived }),
   deleteCategory: (id: number) => invoke<void>("delete_category", { id }),
+  createStarterCategories: () => invoke<void>("create_starter_categories"),
 
   listTransactions: (filter: TransactionFilter) => invoke<Transaction[]>("list_transactions", { filter }),
+  transactionSuggestions: (kind: Kind) => invoke<Suggestion[]>("transaction_suggestions", { kind }),
   createTransaction: (input: TransactionInput) => invoke<Transaction>("create_transaction", { input }),
   updateTransaction: (id: number, input: TransactionInput) => invoke<Transaction>("update_transaction", { id, input }),
   deleteTransaction: (id: number) => invoke<void>("delete_transaction", { id }),

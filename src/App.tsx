@@ -20,7 +20,7 @@ const PAGES = {
   Settings,
 };
 
-type PageName = keyof typeof PAGES;
+export type PageName = keyof typeof PAGES;
 
 function UpdateBanner({ update }: { update: Update }) {
   const [installing, setInstalling] = useState(false);
@@ -97,6 +97,7 @@ function Shell() {
   const state = useMemo(
     () =>
       settings && {
+        setPage,
         categories,
         settings,
         version,

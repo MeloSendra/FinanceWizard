@@ -1,10 +1,10 @@
 use crate::backup::{self, Settings};
-use crate::categories::{self, Category, CategoryInput};
+use crate::categories::{self, Category, CategoryInput, Kind};
 use crate::error::{AppError, Result};
 use crate::purge;
 use crate::recurring::{self, MissedPayment, RecurringInput, RecurringItem, ValueRecord};
 use crate::reports::{self, MonthReport};
-use crate::transactions::{self, Transaction, TransactionFilter, TransactionInput};
+use crate::transactions::{self, Suggestion, Transaction, TransactionFilter, TransactionInput};
 use crate::vault::{self, DATABASE_FILE, Key, Status};
 use chrono::{Local, NaiveDate};
 use rusqlite::Connection;
@@ -145,8 +145,18 @@ pub fn delete_category(db: State<Database>, id: i64) -> Result<()> {
 }
 
 #[tauri::command]
+pub fn create_starter_categories(db: State<Database>) -> Result<()> {
+    categories::create_starter(&mut *db.lock()?)
+}
+
+#[tauri::command]
 pub fn list_transactions(db: State<Database>, filter: TransactionFilter) -> Result<Vec<Transaction>> {
     transactions::list(&*db.lock()?, &filter)
+}
+
+#[tauri::command]
+pub fn transaction_suggestions(db: State<Database>, kind: Kind) -> Result<Vec<Suggestion>> {
+    transactions::suggestions(&*db.lock()?, kind)
 }
 
 #[tauri::command]

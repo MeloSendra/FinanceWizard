@@ -684,6 +684,33 @@ tfoot td {
   font-weight: 600;
 }
 
+.suggest {
+  position: relative;
+}
+
+.suggest-list {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.suggest-list .picker-option {
+  width: 100%;
+}
+
+.get-started {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--ink-2);
+}
+
 .completed-items > summary {
   cursor: pointer;
   color: var(--ink-2);

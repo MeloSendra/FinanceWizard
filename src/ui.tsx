@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { useApp } from "./state";
 import { categoryColor, categoryTree, currentMonth, expandedTree, formatMonth, formatMoney, searchTree, shiftMonth } from "./format";
-import type { Kind } from "./api";
+import { api, type Kind } from "./api";
 
 export function useAction() {
   const [error, setError] = useState<string | null>(null);
@@ -124,6 +124,40 @@ export function Empty({ title, children }: { title: string; children?: ReactNode
       <strong>{title}</strong>
       {children && <p>{children}</p>}
     </div>
+  );
+}
+
+/** Shown while there are no categories, which is also how a reset starts over. */
+export function GetStarted({ onOwn }: { onOwn: () => void }) {
+  const { refresh } = useApp();
+  const { error, busy, run } = useAction();
+  const useSuggested = () =>
+    run(async () => {
+      await api.createStarterCategories();
+      refresh();
+    });
+  return (
+    <section className="card stack">
+      <div>
+        <h2>Set up your categories</h2>
+        <p className="hint">Every transaction goes in a category, and that is how the app sorts your money.</p>
+      </div>
+      <ul className="get-started">
+        <li>Expense and income categories are kept apart, so each transaction only offers the ones that fit.</li>
+        <li>A category can have subcategories, such as Food with Groceries inside it. The parent adds up all of them.</li>
+        <li>Any expense category can hold a monthly budget, and the app warns you before it runs over.</li>
+      </ul>
+      <FormError message={error} />
+      <div className="row">
+        <button type="button" className="primary" disabled={busy} onClick={useSuggested}>
+          Use suggested categories
+        </button>
+        <button type="button" onClick={onOwn}>
+          I'll make my own
+        </button>
+      </div>
+      <p className="hint">Suggested categories can be renamed or deleted at any time.</p>
+    </section>
   );
 }
 

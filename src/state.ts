@@ -1,8 +1,10 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { Update } from "@tauri-apps/plugin-updater";
 import type { Category, Settings } from "./api";
+import type { PageName } from "./App";
 
 export interface AppState {
+  setPage: (page: PageName) => void;
   categories: Category[];
   settings: Settings;
   /** Increases after every change, so views reload their derived data. */

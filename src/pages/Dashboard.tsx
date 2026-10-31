@@ -4,7 +4,7 @@ import { coinDropEnabled, comparisonText, GoldPieces, loadCoins, Treasure } from
 import { useApp, useLoad } from "../state";
 import { TrendChart } from "../charts";
 import { formatDate, formatMoney } from "../format";
-import { CategoryChip, Empty, Money, MonthNav } from "../ui";
+import { CategoryChip, Empty, GetStarted, Money, MonthNav } from "../ui";
 
 function greeting(): string {
   const hour = new Date().getHours();
@@ -61,7 +61,7 @@ function MoneyRemaining({ report }: { report: MonthReport }) {
 }
 
 export default function Dashboard() {
-  const { month, categories } = useApp();
+  const { month, categories, setPage } = useApp();
   const report = useLoad(() => api.monthReport(month), [month]);
   if (!report) return null;
 
@@ -74,6 +74,8 @@ export default function Dashboard() {
         <h1>{greeting()}</h1>
         <MonthNav />
       </header>
+
+      {categories.length === 0 && <GetStarted onOwn={() => setPage("Categories")} />}
 
       <section className="hero-row">
         <div className="card">

@@ -41,6 +41,14 @@ pub struct TransactionFilter {
     pub category_id: Option<i64>,
 }
 
+/// A note typed before, with the category it was last used with.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Suggestion {
+    pub description: String,
+    pub category_id: i64,
+}
+
 const SELECT: &str = "
     SELECT t.id, t.date, t.amount_cents, t.description, t.category_id, c.name, c.kind,
            t.recurring_item_id, r.name, t.scheduled_date
@@ -88,6 +96,20 @@ pub fn list(conn: &Connection, filter: &TransactionFilter) -> Result<Vec<Transac
         params![filter.from, filter.to, filter.kind, filter.category_id],
         from_row,
     )?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// Most used first, then most recent. Scheduled payments are left out since
+/// nobody types those. With MAX, SQLite takes the other columns from the latest row.
+pub fn suggestions(conn: &Connection, kind: Kind) -> Result<Vec<Suggestion>> {
+    let mut statement = conn.prepare(
+        "SELECT t.description, t.category_id, MAX(t.date)
+         FROM transactions t JOIN categories c ON c.id = t.category_id
+         WHERE c.kind = ?1 AND c.archived = 0 AND t.description <> '' AND t.scheduled_date IS NULL
+         GROUP BY t.description COLLATE NOCASE
+         ORDER BY COUNT(*) DESC, MAX(t.date) DESC",
+    )?;
+    let rows = statement.query_map([kind], |row| Ok(Suggestion { description: row.get(0)?, category_id: row.get(1)? }))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
@@ -165,6 +187,47 @@ mod tests {
 
     fn input(date: &str, amount_cents: i64, category_id: i64) -> TransactionInput {
         TransactionInput { date: date.into(), amount_cents, description: String::new(), category_id, recurring_item_id: None }
+    }
+
+    fn noted(conn: &Connection, date: &str, note: &str, category_id: i64) {
+        create(conn, &TransactionInput { description: note.into(), ..input(date, 100, category_id) }).unwrap();
+    }
+
+    #[test]
+    fn suggestions_rank_by_use_and_keep_the_latest_category() {
+        let conn = test_connection();
+        let food = category(&conn, "Food", Kind::Expense, None);
+        let treats = category(&conn, "Treats", Kind::Expense, None);
+        noted(&conn, "2026-01-01", "Bakery", food);
+        noted(&conn, "2026-02-01", "Lidl", food);
+        noted(&conn, "2026-02-02", "lidl", treats);
+        noted(&conn, "2026-02-03", "", food);
+
+        let found = suggestions(&conn, Kind::Expense).unwrap();
+        let summary: Vec<_> = found.iter().map(|s| (s.description.as_str(), s.category_id)).collect();
+        assert_eq!(summary, [("lidl", treats), ("Bakery", food)]);
+    }
+
+    #[test]
+    fn suggestions_skip_other_kinds_archived_categories_and_scheduled_payments() {
+        let conn = test_connection();
+        let food = category(&conn, "Food", Kind::Expense, None);
+        let old = category(&conn, "Old", Kind::Expense, None);
+        let salary = category(&conn, "Salary", Kind::Income, None);
+        noted(&conn, "2026-01-01", "Lidl", food);
+        noted(&conn, "2026-01-01", "Gone", old);
+        noted(&conn, "2026-01-01", "Pay", salary);
+        categories::set_archived(&conn, old, true).unwrap();
+        conn.execute(
+            "INSERT INTO transactions (date, amount_cents, description, category_id, scheduled_date)
+             VALUES ('2026-01-01', 100, 'Gym', ?1, '2026-01-01')",
+            [food],
+        )
+        .unwrap();
+
+        let found = suggestions(&conn, Kind::Expense).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].description, "Lidl");
     }
 
     #[test]

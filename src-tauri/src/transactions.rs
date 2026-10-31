@@ -1,6 +1,8 @@
 use crate::categories::{self, Kind};
 use crate::dates::parse_date;
 use crate::error::{AppError, Result, invalid};
+use crate::recurring::{self, RecurringItem};
+use chrono::NaiveDate;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 
@@ -120,23 +122,34 @@ pub fn create(conn: &Connection, input: &TransactionInput) -> Result<Transaction
     get(conn, conn.last_insert_rowid())
 }
 
-pub fn update(conn: &Connection, id: i64, input: &TransactionInput) -> Result<Transaction> {
+/// The recurring item a payment counts toward, read before the payment changes.
+fn linked_item(conn: &Connection, transaction: &Transaction, today: NaiveDate) -> Result<Option<RecurringItem>> {
+    transaction.recurring_item_id.map(|id| recurring::get(conn, id, today)).transpose()
+}
+
+pub fn update(conn: &Connection, id: i64, input: &TransactionInput, today: NaiveDate) -> Result<Transaction> {
     let existing = get(conn, id)?;
     validate(conn, input, Some(existing.category_id))?;
+    let linked = linked_item(conn, &existing, today)?;
     conn.execute(
         "UPDATE transactions
          SET date = ?1, amount_cents = ?2, description = ?3, category_id = ?4, recurring_item_id = ?5
          WHERE id = ?6",
         params![input.date, input.amount_cents, input.description.trim(), input.category_id, input.recurring_item_id, id],
     )?;
+    if let Some(item) = linked {
+        recurring::reopen_if_unfinished(conn, &item, today)?;
+    }
     get(conn, id)
 }
 
-pub fn delete(conn: &Connection, id: i64) -> Result<()> {
-    match conn.execute("DELETE FROM transactions WHERE id = ?1", [id])? {
-        0 => Err(AppError::NotFound),
-        _ => Ok(()),
+pub fn delete(conn: &Connection, id: i64, today: NaiveDate) -> Result<()> {
+    let linked = linked_item(conn, &get(conn, id)?, today)?;
+    conn.execute("DELETE FROM transactions WHERE id = ?1", [id])?;
+    if let Some(item) = linked {
+        recurring::reopen_if_unfinished(conn, &item, today)?;
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -178,7 +191,8 @@ mod tests {
         let existing = create(&conn, &input("2026-01-01", 100, food)).unwrap();
         categories::set_archived(&conn, food, true).unwrap();
         assert!(create(&conn, &input("2026-01-02", 100, food)).is_err());
-        update(&conn, existing.id, &input("2026-01-03", 200, food)).unwrap();
+        let today = crate::dates::parse_date("2026-01-03").unwrap();
+        update(&conn, existing.id, &input("2026-01-03", 200, food), today).unwrap();
     }
 
     #[test]

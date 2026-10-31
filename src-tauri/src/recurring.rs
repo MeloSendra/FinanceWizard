@@ -333,6 +333,26 @@ pub fn add_missed_payments(conn: &mut Connection, id: i64, dates: &[String], tod
     Ok(created)
 }
 
+/// Whether the item has run its course, by the same rules as `complete_finished`.
+fn finished(item: &RecurringItem, today: NaiveDate) -> bool {
+    let paid_off = item.item_type == ItemType::Financing
+        && item.installment_count.is_some_and(|count| item.paid_installments >= count);
+    paid_off || item.end_date.as_deref().is_some_and(|end| end < today.to_string().as_str())
+}
+
+/// Gives back an item that a lost payment has left unfinished. `before` is the
+/// item as it was, so one the user completed by hand stays completed. Dates
+/// already passed are offered as past payments rather than posted again.
+pub fn reopen_if_unfinished(conn: &Connection, before: &RecurringItem, today: NaiveDate) -> Result<()> {
+    if before.status == Status::Completed && finished(before, today) && !finished(&get(conn, before.id, today)?, today) {
+        conn.execute(
+            "UPDATE recurring_items SET status = 'active', generated_through = MAX(generated_through, ?1) WHERE id = ?2",
+            params![(today - Days::new(1)).to_string(), before.id],
+        )?;
+    }
+    Ok(())
+}
+
 fn complete_finished(conn: &Connection, today: NaiveDate) -> Result<()> {
     conn.execute(
         "UPDATE recurring_items SET status = 'completed'
@@ -429,10 +449,23 @@ pub fn update(conn: &Connection, id: i64, input: &RecurringInput, today: NaiveDa
     let existing = get(conn, id, today)?;
     let name = validate(conn, input, Some(existing.category_id))?;
     let (total, count, opening_cents, opening_installments) = financing_fields(input);
+    let edited = RecurringItem {
+        item_type: input.item_type,
+        end_date: input.end_date.clone(),
+        installment_count: count,
+        paid_installments: existing.paid_installments - existing.opening_paid_installments + opening_installments,
+        ..existing.clone()
+    };
+    if existing.status == Status::Completed && input.status == Status::Active && finished(&edited, today) {
+        return invalid("This item is finished. Raise the number of installments or change the end date to reopen it.");
+    }
+    // An edit that undoes what finished the item reopens it. One completed by
+    // hand with payments left stays completed.
+    let status = if finished(&existing, today) && !finished(&edited, today) { Status::Active } else { input.status };
     // Gaining a schedule or being reactivated also starts from now, for the
     // same reason as in `create`.
     let resumed = (existing.schedule_day.is_none() && input.schedule_day.is_some())
-        || (existing.status == Status::Completed && input.status == Status::Active);
+        || (existing.status == Status::Completed && status == Status::Active);
     let mut generated_through = existing.generated_through.clone();
     if resumed {
         generated_through = generated_through.max((today - Days::new(1)).to_string());
@@ -444,7 +477,7 @@ pub fn update(conn: &Connection, id: i64, input: &RecurringInput, today: NaiveDa
              opening_paid_cents = ?12, opening_paid_installments = ?13
          WHERE id = ?14",
         params![
-            name, input.item_type, input.frequency, input.start_date, input.end_date, input.status,
+            name, input.item_type, input.frequency, input.start_date, input.end_date, status,
             input.category_id, input.schedule_day, generated_through, total, count, opening_cents, opening_installments, id
         ],
     )?;
@@ -611,7 +644,7 @@ mod tests {
         create(&mut conn, &subscription(category, "2026-01-01", Some(15)), 500_00, date("2026-01-01")).unwrap();
         generate_due(&mut conn, date("2026-01-20")).unwrap();
         let id = transactions::list(&conn, &TransactionFilter::default()).unwrap()[0].id;
-        transactions::delete(&conn, id).unwrap();
+        transactions::delete(&conn, id, date("2026-01-20")).unwrap();
         assert_eq!(generate_due(&mut conn, date("2026-02-01")).unwrap(), 0);
         assert!(payments(&conn).is_empty());
     }
@@ -769,6 +802,110 @@ mod tests {
         assert_eq!(item.status, Status::Completed);
         assert_eq!(item.paid_installments, 4);
         assert_eq!(item.paid_cents, 800_00);
+    }
+
+    /// A financing of 4 installments, 2 entered as paid, finished by two payments.
+    fn finished_financing(conn: &mut Connection) -> (RecurringItem, RecurringInput) {
+        let category = expense(conn);
+        let input = financing(category, "2026-01-01", 4, 2);
+        let item = create(conn, &input, 200_00, date("2026-01-01")).unwrap();
+        generate_due(conn, date("2026-03-01")).unwrap();
+        let item = get(conn, item.id, date("2026-03-01")).unwrap();
+        assert_eq!(item.status, Status::Completed);
+        (item, RecurringInput { status: Status::Completed, ..input })
+    }
+
+    #[test]
+    fn raising_the_installment_count_reopens_a_finished_item() {
+        let mut conn = test_connection();
+        let (item, input) = finished_financing(&mut conn);
+        let today = date("2026-03-10");
+        let edited = update(&conn, item.id, &RecurringInput { installment_count: Some(6), ..input }, today).unwrap();
+        assert_eq!(edited.status, Status::Active);
+        assert_eq!(edited.next_payment_date.as_deref(), Some("2026-04-01"));
+
+        generate_due(&mut conn, today).unwrap();
+        assert_eq!(get(&conn, item.id, today).unwrap().status, Status::Active);
+    }
+
+    #[test]
+    fn lowering_the_installments_already_paid_reopens_a_finished_item() {
+        let mut conn = test_connection();
+        let (item, input) = finished_financing(&mut conn);
+        let input = RecurringInput { opening_paid_installments: 1, ..input };
+        let edited = update(&conn, item.id, &input, date("2026-03-10")).unwrap();
+        assert_eq!(edited.status, Status::Active);
+        assert_eq!(edited.paid_installments, 3);
+    }
+
+    #[test]
+    fn deleting_a_payment_reopens_a_finished_item_and_lists_the_date_as_missed() {
+        let mut conn = test_connection();
+        let (item, _) = finished_financing(&mut conn);
+        let today = date("2026-03-10");
+        let payment = transactions::list(&conn, &TransactionFilter::default()).unwrap()[0].id;
+        transactions::delete(&conn, payment, today).unwrap();
+
+        assert_eq!(get(&conn, item.id, today).unwrap().status, Status::Active);
+        assert_eq!(generate_due(&mut conn, today).unwrap(), 0);
+        let missed: Vec<_> = missed_payments(&conn, item.id, today).unwrap().into_iter().map(|p| p.date).collect();
+        assert!(missed.contains(&"2026-03-01".to_string()));
+    }
+
+    #[test]
+    fn unlinking_a_payment_reopens_a_finished_item() {
+        let mut conn = test_connection();
+        let (item, _) = finished_financing(&mut conn);
+        let today = date("2026-03-10");
+        let payment = transactions::list(&conn, &TransactionFilter::default()).unwrap().remove(0);
+        let input = TransactionInput {
+            date: payment.date,
+            amount_cents: payment.amount_cents,
+            description: payment.description,
+            category_id: payment.category_id,
+            recurring_item_id: None,
+        };
+        transactions::update(&conn, payment.id, &input, today).unwrap();
+        assert_eq!(get(&conn, item.id, today).unwrap().status, Status::Active);
+    }
+
+    #[test]
+    fn an_item_completed_by_hand_stays_completed() {
+        let mut conn = test_connection();
+        let category = expense(&conn);
+        let input = financing(category, "2026-01-01", 12, 0);
+        let item = create(&mut conn, &input, 200_00, date("2026-01-01")).unwrap();
+        generate_due(&mut conn, date("2026-02-01")).unwrap();
+        let today = date("2026-02-02");
+        let completed = RecurringInput { status: Status::Completed, ..input };
+        update(&conn, item.id, &completed, today).unwrap();
+        assert_eq!(update(&conn, item.id, &completed, today).unwrap().status, Status::Completed);
+
+        let payment = transactions::list(&conn, &TransactionFilter::default()).unwrap()[0].id;
+        transactions::delete(&conn, payment, today).unwrap();
+        assert_eq!(get(&conn, item.id, today).unwrap().status, Status::Completed);
+    }
+
+    #[test]
+    fn reactivating_an_item_that_is_still_finished_is_rejected() {
+        let mut conn = test_connection();
+        let (item, input) = finished_financing(&mut conn);
+        let active = RecurringInput { status: Status::Active, ..input };
+        assert!(update(&conn, item.id, &active, date("2026-03-10")).is_err());
+    }
+
+    #[test]
+    fn extending_a_passed_end_date_reopens_the_item() {
+        let mut conn = test_connection();
+        let category = expense(&conn);
+        let input = RecurringInput { end_date: Some("2026-02-01".into()), ..subscription(category, "2026-01-01", Some(1)) };
+        let item = create(&mut conn, &input, 10_00, date("2026-01-01")).unwrap();
+        generate_due(&mut conn, date("2026-03-01")).unwrap();
+        let today = date("2026-03-01");
+        assert_eq!(get(&conn, item.id, today).unwrap().status, Status::Completed);
+
+        let extended = RecurringInput { end_date: None, status: Status::Completed, ..input };
+        assert_eq!(update(&conn, item.id, &extended, today).unwrap().status, Status::Active);
     }
 
     #[test]

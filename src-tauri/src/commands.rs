@@ -156,12 +156,12 @@ pub fn create_transaction(db: State<Database>, input: TransactionInput) -> Resul
 
 #[tauri::command]
 pub fn update_transaction(db: State<Database>, id: i64, input: TransactionInput) -> Result<Transaction> {
-    transactions::update(&*db.lock()?, id, &input)
+    transactions::update(&*db.lock()?, id, &input, today())
 }
 
 #[tauri::command]
 pub fn delete_transaction(db: State<Database>, id: i64) -> Result<()> {
-    transactions::delete(&*db.lock()?, id)
+    transactions::delete(&*db.lock()?, id, today())
 }
 
 #[tauri::command]

@@ -52,4 +52,13 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: FinanceWizard ${{ github.ref_name }}
           releaseBody: See the commits since the previous version.
+          releaseDraft: true
           includeUpdaterJson: true
+
+      # Published releases are immutable, so the files must be attached to the
+      # draft first. Publishing also has to come last for the updater to see it.
+      - name: Publish the release
+        run: gh release edit "$env:GITHUB_REF_NAME" --draft=false --latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}

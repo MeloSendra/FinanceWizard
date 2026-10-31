@@ -128,8 +128,10 @@ fn validate(conn: &Connection, input: &TransactionInput, current_category: Optio
     if category.archived && current_category != Some(category.id) {
         return invalid("Archived categories cannot be used for new entries.");
     }
-    if input.recurring_item_id.is_some() && category.kind != Kind::Expense {
-        return invalid("Recurring payments must use an expense category.");
+    if let Some(item_id) = input.recurring_item_id
+        && recurring::kind_of(conn, item_id)? != category.kind
+    {
+        return invalid("A payment and its recurring item must both be income or both be expenses.");
     }
     Ok(())
 }

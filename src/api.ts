@@ -69,6 +69,7 @@ export interface RecurringItem {
   status: Status;
   categoryId: number;
   categoryName: string;
+  kind: Kind;
   scheduleDay: number | null;
   generatedThrough: string;
   totalCents: number | null;
@@ -114,6 +115,7 @@ export interface UpcomingPayment {
   date: string;
   amountCents: number;
   categoryId: number;
+  kind: Kind;
 }
 
 export interface BudgetRow {
@@ -136,12 +138,15 @@ export interface TrendPoint {
 export interface MonthReport {
   month: string;
   incomeCents: number;
+  upcomingIncomeCents: number;
+  projectedIncomeCents: number;
   spentCents: number;
   upcomingCents: number;
   projectedCents: number;
   budgetCents: number | null;
   rows: BudgetRow[];
   upcoming: UpcomingPayment[];
+  upcomingIncome: UpcomingPayment[];
   trend: TrendPoint[];
 }
 

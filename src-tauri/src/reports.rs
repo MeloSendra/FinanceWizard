@@ -35,12 +35,15 @@ pub struct TrendPoint {
 pub struct MonthReport {
     pub month: String,
     pub income_cents: i64,
+    pub upcoming_income_cents: i64,
+    pub projected_income_cents: i64,
     pub spent_cents: i64,
     pub upcoming_cents: i64,
     pub projected_cents: i64,
     pub budget_cents: Option<i64>,
     pub rows: Vec<BudgetRow>,
     pub upcoming: Vec<UpcomingPayment>,
+    pub upcoming_income: Vec<UpcomingPayment>,
     pub trend: Vec<TrendPoint>,
 }
 
@@ -173,8 +176,11 @@ fn trend(conn: &Connection, end_month: i32) -> Result<Vec<TrendPoint>> {
 
 pub fn month_report(conn: &Connection, month: &str, today: NaiveDate) -> Result<MonthReport> {
     let (first, last) = month_bounds(month)?;
-    let upcoming = recurring::upcoming(conn, today, first, last)?;
+    let (upcoming_income, upcoming): (Vec<_>, Vec<_>) = recurring::upcoming(conn, today, first, last)?
+        .into_iter()
+        .partition(|payment| payment.kind == Kind::Income);
     let upcoming_cents = upcoming.iter().map(|payment| payment.amount_cents).sum();
+    let upcoming_income_cents: i64 = upcoming_income.iter().map(|payment| payment.amount_cents).sum();
     let (rows, budget_cents) = budget_rows(conn, month, &upcoming)?;
 
     let expense_ids: HashSet<i64> = categories::list(conn)?
@@ -194,12 +200,15 @@ pub fn month_report(conn: &Connection, month: &str, today: NaiveDate) -> Result<
     Ok(MonthReport {
         month: month.to_string(),
         income_cents,
+        upcoming_income_cents,
+        projected_income_cents: income_cents + upcoming_income_cents,
         spent_cents,
         upcoming_cents,
         projected_cents: spent_cents + upcoming_cents,
         budget_cents,
         rows,
         upcoming,
+        upcoming_income,
         trend: trend(conn, month_index(first))?,
     })
 }
@@ -305,6 +314,32 @@ mod tests {
         assert_eq!((past.spent_cents, past.upcoming_cents), (100_00, 0));
         let future = month_report(&conn, "2026-05", date("2026-03-10")).unwrap();
         assert_eq!((future.spent_cents, future.upcoming_cents), (0, 150_00));
+    }
+
+    #[test]
+    fn expected_income_is_projected_separately_from_spending() {
+        let mut conn = test_connection();
+        let bills = category(&conn, "Bills", Kind::Expense, None, Some(100_00));
+        let salary = category(&conn, "Salary", Kind::Income, None, None);
+        schedule(&mut conn, "Gym", bills, 28, 150_00, "2026-03-01");
+        schedule(&mut conn, "Pay", salary, 25, 2000_00, "2026-03-01");
+
+        let next = month_report(&conn, "2026-04", date("2026-03-10")).unwrap();
+        assert_eq!((next.income_cents, next.upcoming_income_cents, next.projected_income_cents), (0, 2000_00, 2000_00));
+        assert_eq!((next.upcoming_cents, next.projected_cents), (150_00, 150_00));
+        assert_eq!(next.upcoming.len(), 1);
+        assert_eq!(next.upcoming_income[0].name, "Pay");
+        assert_eq!(row(&next, bills).projected_cents, 150_00);
+    }
+
+    #[test]
+    fn income_moves_from_expected_to_received_without_double_counting() {
+        let mut conn = test_connection();
+        let salary = category(&conn, "Salary", Kind::Income, None, None);
+        schedule(&mut conn, "Pay", salary, 25, 2000_00, "2026-03-01");
+        generate_due(&mut conn, date("2026-03-25")).unwrap();
+        let report = month_report(&conn, "2026-03", date("2026-03-25")).unwrap();
+        assert_eq!((report.income_cents, report.upcoming_income_cents, report.projected_income_cents), (2000_00, 0, 2000_00));
     }
 
     #[test]

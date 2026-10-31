@@ -56,6 +56,8 @@ pub struct RecurringItem {
     pub status: Status,
     pub category_id: i64,
     pub category_name: String,
+    /// Comes from the category, as it does for transactions.
+    pub kind: Kind,
     pub schedule_day: Option<u32>,
     pub generated_through: String,
     pub total_cents: Option<i64>,
@@ -102,6 +104,7 @@ pub struct UpcomingPayment {
     pub date: String,
     pub amount_cents: i64,
     pub category_id: i64,
+    pub kind: Kind,
 }
 
 #[derive(Debug, Serialize)]
@@ -116,7 +119,8 @@ const SELECT: &str = "
            r.category_id, c.name, r.schedule_day, r.generated_through, r.total_cents,
            r.installment_count, r.opening_paid_cents, r.opening_paid_installments,
            r.opening_paid_cents + COALESCE((SELECT SUM(t.amount_cents) FROM transactions t WHERE t.recurring_item_id = r.id), 0),
-           r.opening_paid_installments + (SELECT COUNT(*) FROM transactions t WHERE t.recurring_item_id = r.id)
+           r.opening_paid_installments + (SELECT COUNT(*) FROM transactions t WHERE t.recurring_item_id = r.id),
+           c.kind
     FROM recurring_items r
     JOIN categories c ON c.id = r.category_id";
 
@@ -131,6 +135,7 @@ fn from_row(row: &Row) -> rusqlite::Result<RecurringItem> {
         status: row.get(6)?,
         category_id: row.get(7)?,
         category_name: row.get(8)?,
+        kind: row.get(17)?,
         schedule_day: row.get(9)?,
         generated_through: row.get(10)?,
         total_cents: row.get(11)?,
@@ -167,6 +172,16 @@ pub fn get(conn: &Connection, id: i64, today: NaiveDate) -> Result<RecurringItem
         .optional()?
         .ok_or(AppError::NotFound)?;
     enrich(conn, item, today)
+}
+
+pub fn kind_of(conn: &Connection, id: i64) -> Result<Kind> {
+    conn.query_row(
+        "SELECT c.kind FROM recurring_items r JOIN categories c ON c.id = r.category_id WHERE r.id = ?1",
+        [id],
+        |row| row.get(0),
+    )
+    .optional()?
+    .ok_or(AppError::NotFound)
 }
 
 /// The value that applies on a date: the latest record effective by then,
@@ -245,6 +260,7 @@ pub fn upcoming(conn: &Connection, today: NaiveDate, first: NaiveDate, last: Nai
                     date: date.to_string(),
                     amount_cents: value_at(conn, item.id, date)?,
                     category_id: item.category_id,
+                    kind: item.kind,
                 });
             }
         }
@@ -380,8 +396,8 @@ fn validate(conn: &Connection, input: &RecurringInput, current_category: Option<
         return invalid("The end date cannot be before the start date.");
     }
     let category = categories::get(conn, input.category_id)?;
-    if category.kind != Kind::Expense {
-        return invalid("Recurring items must use an expense category.");
+    if input.item_type == ItemType::Financing && category.kind != Kind::Expense {
+        return invalid("Financing must use an expense category.");
     }
     if category.archived && current_category != Some(category.id) {
         return invalid("Archived categories cannot be used for new entries.");
@@ -950,6 +966,48 @@ mod tests {
         assert!(add_value(&conn, item.id, "2026-01-01", 20_00).is_err());
         let only = list_values(&conn, item.id).unwrap().remove(0);
         assert!(delete_value(&conn, only.id).is_err());
+    }
+
+    fn salary(conn: &Connection) -> i64 {
+        let input = CategoryInput { name: "Salary".into(), kind: Kind::Income, parent_id: None, default_budget_cents: None, color: None };
+        categories::create(conn, &input).unwrap().id
+    }
+
+    #[test]
+    fn recurring_income_posts_once_as_income() {
+        let mut conn = test_connection();
+        let category = salary(&conn);
+        let item = create(&mut conn, &subscription(category, "2026-01-01", Some(25)), 2000_00, date("2026-01-01")).unwrap();
+        assert_eq!(item.kind, Kind::Income);
+        assert_eq!(generate_due(&mut conn, date("2026-01-25")).unwrap(), 1);
+        assert_eq!(generate_due(&mut conn, date("2026-01-25")).unwrap(), 0);
+        let posted = transactions::list(&conn, &TransactionFilter::default()).unwrap();
+        assert_eq!(posted[0].kind, Kind::Income);
+        assert_eq!(posted[0].recurring_item_id, Some(item.id));
+    }
+
+    #[test]
+    fn financing_cannot_use_an_income_category() {
+        let mut conn = test_connection();
+        let category = salary(&conn);
+        assert!(create(&mut conn, &financing(category, "2026-01-01", 4, 0), 200_00, date("2026-01-01")).is_err());
+    }
+
+    #[test]
+    fn a_payment_must_match_the_kind_of_its_item() {
+        let mut conn = test_connection();
+        let bills = expense(&conn);
+        let pay = salary(&conn);
+        let item = create(&mut conn, &subscription(pay, "2026-01-01", None), 10_00, date("2026-01-01")).unwrap();
+        let payment = |category_id| TransactionInput {
+            date: "2026-01-05".into(),
+            amount_cents: 10_00,
+            description: String::new(),
+            category_id,
+            recurring_item_id: Some(item.id),
+        };
+        assert!(transactions::create(&conn, &payment(bills)).is_err());
+        transactions::create(&conn, &payment(pay)).unwrap();
     }
 
     #[test]

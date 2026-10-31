@@ -91,6 +91,7 @@ function TransactionDialog({ transaction, onClose }: { transaction: Transaction 
   const [categoryId, setCategoryId] = useState(transaction?.categoryId ?? null);
   const [recurringItemId, setRecurringItemId] = useState(transaction?.recurringItemId ?? null);
   const [confirming, setConfirming] = useState(false);
+  const linkable = recurring?.filter((item) => item.kind === kind) ?? [];
 
   const changeKind = (next: Kind) => {
     setKind(next);
@@ -147,14 +148,14 @@ function TransactionDialog({ transaction, onClose }: { transaction: Transaction 
             placeholder={categories.some((category) => category.kind === kind) ? "Choose a category" : `No ${kind} categories yet`}
           />
         </Field>
-        {kind === "expense" && (
+        {linkable.length > 0 && (
           <Field label="Payment for a recurring item" hint="Linked payments count toward financing progress.">
             <select
               value={recurringItemId ?? ""}
               onChange={(event) => setRecurringItemId(event.target.value ? Number(event.target.value) : null)}
             >
               <option value="">None</option>
-              {recurring?.map((item) => (
+              {linkable.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name}
                 </option>

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { api, type Category, type Kind } from "../api";
 import { useApp, useLoad } from "../state";
-import { amountText, categoryTree, formatDate, nextPaletteColor, paletteColor, parseAmount } from "../format";
-import { CategoryChip, CategorySelect, Confirm, Dialog, Empty, Field, Form, FormError, Money, useAction, useCategoryStyle } from "../ui";
+import { amountText, categoryTree, expandedTree, formatDate, nextPaletteColor, paletteColor, parseAmount } from "../format";
+import { CategoryChip, CategorySelect, Confirm, Dialog, Empty, Field, Form, FormError, Money, TreeToggle, useAction, useCategoryStyle, useExpandedCategories } from "../ui";
 
 interface Draft {
   category: Category | null;
@@ -169,42 +169,53 @@ function CategoryDetail({ category, onEdit, onAddChild }: { category: Category; 
   );
 }
 
-function TreeRow(props: { category: Category; depth: number; selected: boolean; onSelect: () => void }) {
+function TreeRow(props: { category: Category; depth: number; selected: boolean; open: boolean; onToggle: () => void; onSelect: () => void }) {
   const { category, depth } = props;
   const style = useCategoryStyle(category.id);
   return (
-    <button
-      type="button"
-      className={`tree-row${category.archived ? " archived" : ""}`}
-      aria-pressed={props.selected}
-      style={{ ...style, paddingLeft: 8 + depth * 18 }}
-      onClick={props.onSelect}
-    >
-      <i className="cat-dot" />
-      {category.name}
-      {category.archived && <span className="tag">Archived</span>}
-      {category.defaultBudgetCents !== null && (
-        <span className="num">
-          <Money cents={category.defaultBudgetCents} />
-        </span>
+    <div className="tree-line" style={{ paddingLeft: depth * 18 }}>
+      {category.childCount > 0 ? (
+        <TreeToggle name={category.name} open={props.open} onToggle={props.onToggle} />
+      ) : (
+        <span className="tree-toggle-space" />
       )}
-    </button>
+      <button
+        type="button"
+        className={`tree-row${category.archived ? " archived" : ""}`}
+        aria-pressed={props.selected}
+        style={style}
+        onClick={props.onSelect}
+      >
+        <i className="cat-dot" />
+        {category.name}
+        {category.childCount > 0 && !props.open && <span className="hint">{category.childCount}</span>}
+        {category.archived && <span className="tag">Archived</span>}
+        {category.defaultBudgetCents !== null && (
+          <span className="num">
+            <Money cents={category.defaultBudgetCents} />
+          </span>
+        )}
+      </button>
+    </div>
   );
 }
 
 function Tree(props: { title: string; kind: Kind; selected: number | null; onSelect: (id: number) => void }) {
   const { categories } = useApp();
+  const { expanded, toggle } = useExpandedCategories();
   const entries = categoryTree(categories, props.kind);
   return (
     <section className="card">
       <h2>{props.title}</h2>
       {entries.length === 0 && <p className="hint">None yet.</p>}
-      {entries.map(({ category, depth }) => (
+      {expandedTree(entries, expanded).map(({ category, depth }) => (
         <TreeRow
           key={category.id}
           category={category}
           depth={depth}
           selected={props.selected === category.id}
+          open={expanded.includes(category.id)}
+          onToggle={() => toggle(category.id)}
           onSelect={() => props.onSelect(category.id)}
         />
       ))}

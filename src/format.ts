@@ -156,3 +156,18 @@ export function categoryTree(categories: Category[], kind?: Kind): TreeEntry[] {
   visit(null, 0);
   return entries;
 }
+
+/** Leaves out subcategories of parents that aren't expanded. */
+export function expandedTree(entries: TreeEntry[], expanded: number[]): TreeEntry[] {
+  const listed = new Set(entries.map(({ category }) => category.id));
+  return entries.filter(({ category: { parentId } }) => parentId === null || !listed.has(parentId) || expanded.includes(parentId));
+}
+
+/** Entries whose name, or whose parent's name, contains `search`. */
+export function searchTree(entries: TreeEntry[], search: string): TreeEntry[] {
+  const needle = search.trim().toLowerCase();
+  const names = new Map(entries.map(({ category }) => [category.id, category.name.toLowerCase()]));
+  return entries.filter(
+    ({ category }) => names.get(category.id)?.includes(needle) || (category.parentId !== null && names.get(category.parentId)?.includes(needle)),
+  );
+}
